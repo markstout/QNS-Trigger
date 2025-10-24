@@ -214,7 +214,7 @@ function triggered_processEmailsToDoc() {
 
 function triggered_convertTextNotesToDoc() {
   if (!checkPreferencesFileExists()) { return; } 
-  Logger.log("Starting file processing for QNS-Triggered notes folder (including subfolders).");
+  Logger.log("Starting file processing for QNS-Triggered notes folder.");
   
   const preferences = loadPreferences();
   if (!preferences || !preferences.notesFolder) {
@@ -229,14 +229,10 @@ function triggered_convertTextNotesToDoc() {
   }
 
   try {
-    // MODIFIED: Use the recursive function to find files in all subfolders
-    const files = recursivelyFindFilesByType(targetFolder, 'text/plain');
+    const files = targetFolder.getFilesByType('text/plain');
     let filesProcessed = 0;
-    
-    Logger.log(`Found ${files.length} text file(s) to process.`);
-
-    // MODIFIED: Loop through the array of files
-    files.forEach(file => {
+    while (files.hasNext()) {
+      const file = files.next();
       try {
         const fileContent = file.getBlob().getDataAsString();
         const fileName = file.getName();
@@ -268,8 +264,7 @@ function triggered_convertTextNotesToDoc() {
 
         addStandardDocFooter(newDoc);
         const newDocFile = DriveApp.getFileById(newDoc.getId());
-        // Place the new doc in the same folder as the original file
-        file.getParents().next().addFile(newDocFile);
+        targetFolder.addFile(newDocFile);
         DriveApp.getRootFolder().removeFile(newDocFile);
         Logger.log(`Created Google Doc from "${fileName}" at: ${newDoc.getUrl()}`);
         
@@ -280,7 +275,7 @@ function triggered_convertTextNotesToDoc() {
       } catch (fileProcessError) {
         Logger.log(`ERROR: Could not process file "${file.getName()}": ${fileProcessError.toString()}`);
       }
-    });
+    }
     Logger.log(`File processing completed. ${filesProcessed} files converted.`);
   } catch (e) {
     Logger.log(`An error occurred during notes folder file processing: ${e.toString()}`);
@@ -328,7 +323,7 @@ function triggered_MoveKeepNotes() {
 
 function triggered_convertJsonNotesToDoc() {
   if (!checkPreferencesFileExists()) { return; } 
-  Logger.log("Starting JSON note processing for QNS-Triggered (including subfolders).");
+  Logger.log("Starting JSON note processing for QNS-Triggered.");
 
   const preferences = loadPreferences();
   if (!preferences || !preferences.notesFolder) {
@@ -343,13 +338,10 @@ function triggered_convertJsonNotesToDoc() {
   }
 
   try {
-    // MODIFIED: Use the recursive function to find files in all subfolders
-    const files = recursivelyFindFilesByType(targetFolder, 'application/json');
+    const files = targetFolder.getFilesByType('application/json');
     let filesProcessed = 0;
-    Logger.log(`Found ${files.length} JSON file(s) to process.`);
-
-    // MODIFIED: Loop through the array of files
-    files.forEach(file => {
+    while (files.hasNext()) {
+      const file = files.next();
       try {
         const fileContent = file.getBlob().getDataAsString();
         const data = JSON.parse(fileContent);
@@ -383,24 +375,34 @@ function triggered_convertJsonNotesToDoc() {
             Logger.log(`Appended to log file: "${logFileName}"`);
           } else {
             Logger.log(`Log file not found: "${logFileName}". Skipping.`);
-            return; // Skip to the next file
+            continue; // Skip to the next file
           }
         
-        // Case 2: Bookmark or Case 3: Simple Note (logic for creating new doc is similar)
-        } else {
-          const isBookmark = data.url && data.url.startsWith('http');
-          docTitle = isBookmark ? `Bookmark${data.title ? ' - ' + data.title : ''}` : `Note${data.title ? ' - ' + data.title : ''}`;
+        // Case 2: Bookmark
+        } else if (data.url && data.url.startsWith('http')) {
+          docTitle = `Bookmark${data.title ? ' - ' + data.title : ''}`;
           newDoc = DocumentApp.create(docTitle);
           docBody = newDoc.getBody();
           addStandardDocHeader(newDoc, new Date(data.timestamp), data.title, data.url, "QNS Desktop");
           docBody.appendParagraph(data.notes);
           addStandardDocFooter(newDoc);
+          const newDocFile = DriveApp.getFileById(newDoc.getId());
+          targetFolder.addFile(newDocFile);
+          DriveApp.getRootFolder().removeFile(newDocFile);
+          Logger.log(`Created Google Doc from "${file.getName()}" at: ${newDoc.getUrl()}`);
           
-          const newDocFile = DriveApp.getFileById(newDoc.getId());
-          // Place the new doc in the same folder as the original file
-          file.getParents().next().addFile(newDocFile);
-          DriveApp.getRootFolder().removeFile(newDocFile);
-          Logger.log(`Created Google Doc from "${file.getName()}" at: ${newDoc.getUrl()}`);
+        // Case 3: Simple Note
+        } else {
+          docTitle = `Note${data.title ? ' - ' + data.title : ''}`;
+          newDoc = DocumentApp.create(docTitle);
+          docBody = newDoc.getBody();
+          addStandardDocHeader(newDoc, new Date(data.timestamp), data.title, null, "QNS Desktop");
+          docBody.appendParagraph(data.notes);
+          addStandardDocFooter(newDoc);
+          const newDocFile = DriveApp.getFileById(newDoc.getId());
+          targetFolder.addFile(newDocFile);
+          DriveApp.getRootFolder().removeFile(newDocFile);
+          Logger.log(`Created Google Doc from "${file.getName()}" at: ${newDoc.getUrl()}`);
         }
         
         file.setTrashed(true);
@@ -410,7 +412,7 @@ function triggered_convertJsonNotesToDoc() {
       } catch (fileProcessError) {
         Logger.log(`ERROR: Could not process JSON file "${file.getName()}": ${fileProcessError.toString()}`);
       }
-    });
+    }
     Logger.log(`JSON note processing completed. ${filesProcessed} files converted.`);
   } catch (e) {
     Logger.log(`An error occurred during JSON notes processing: ${e.toString()}`);
@@ -531,29 +533,6 @@ function getOrCreateLabel(name) {
     label = GmailApp.createLabel(name);
   }
   return label;
-}
-
-/**
- * Recursively finds all files of a given MIME type within a folder and its subfolders.
- * @param {Folder} folder The starting Google Drive folder.
- * @param {string} mimeType The MIME type of the files to find (e.g., 'text/plain').
- * @return {Array<File>} An array of all found file objects.
- */
-function recursivelyFindFilesByType(folder, mimeType) {
-  let files = [];
-  const folderFiles = folder.getFilesByType(mimeType);
-  while (folderFiles.hasNext()) {
-    files.push(folderFiles.next());
-  }
-  
-  const subFolders = folder.getFolders();
-  while (subFolders.hasNext()) {
-    const subFolder = subFolders.next();
-    // Get files from the subfolder and add them to the main files array
-    files = files.concat(recursivelyFindFilesByType(subFolder, mimeType));
-  }
-  
-  return files;
 }
 
 /**
