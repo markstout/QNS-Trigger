@@ -32,8 +32,7 @@ function setupTriggers() {
     'triggered_processEmailsToDoc',
     'triggered_convertTextNotesToDoc',
     'triggered_MoveKeepNotes',
-    'triggered_convertJsonNotesToDoc',
-    'trigger_makeTagIndex'
+    'triggered_convertJsonNotesToDoc'
   ];
 
   triggerFunctions.forEach(function(functionName) {
@@ -53,6 +52,26 @@ function setupTriggers() {
       Logger.log(`Successfully created 5-minute trigger for ${functionName} (without error notifications).`);
     }
   });
+
+  try {
+    ScriptApp.newTrigger('triggered_makeTagIndex')
+      .timeBased()
+      .everyDays(1)
+      .atHour(3)
+      .nearMinute(0)
+      .withFailureNotificationFrequency(ScriptApp.FailureNotificationFrequency.HOURLY)
+      .create();
+    Logger.log(`Successfully created daily 3 AM to 4 AM trigger for triggered_makeTagIndex with hourly error notifications.`);
+  } catch (e) {
+    Logger.log(`Warning: Could not set failure notification frequency for triggered_makeTagIndex. Error: ${e.message}. Creating trigger without notification setting.`);
+    ScriptApp.newTrigger('triggered_makeTagIndex')
+      .timeBased()
+      .everyDays(1)
+      .atHour(3)
+      .nearMinute(0)
+      .create();
+    Logger.log(`Successfully created daily 3 AM to 4 AM trigger for triggered_makeTagIndex (without error notifications).`);
+  }
   
   // After setting triggers, rename and move this script file for organization.
   try {
