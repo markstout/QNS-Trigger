@@ -383,60 +383,68 @@ function triggered_convertJsonNotesToDoc() {
         let newDoc;
         let docBody;
 
-        // Case 1: Log Entry - when the title is 'log'
-        if (data.title === 'log') {
-          const logFileName = data.url; // The log category is used as the filename
-          const logsFolder = getOrCreateFolder(targetFolder, "Logs");
-          const logFiles = logsFolder.getFilesByName(logFileName);
+        // Case 1: Log Entry
+        if (data.type === 'log' || (data.type === 'note' && data.title === 'log')) {
+          let logFileName;
+          if (data.type === 'log') {
+            logFileName = data.category;
+          } else { // must be type 'note' and title 'log'
+            logFileName = data.title;
+          }
 
-          if (logFiles.hasNext()) {
-            const logDoc = DocumentApp.openById(logFiles.next().getId());
-            docBody = logDoc.getBody();
-            const timestamp = new Date(data.timestamp).toLocaleString();
-            
-            const logOrder = preferences["logOrder"]; 
+          if (!logFileName) {
+            Logger.log(`JSON log object is missing a title or category. Skipping.`);
+            continue;
+          }
+          const logsFolder = getOrCreateFolder(targetFolder, "Logs");
+          const logFiles = logsFolder.getFilesByName(logFileName);
 
-            if (logOrder === "newLogEntryAtTop") {
-              docBody.insertParagraph(0, data.notes);
-              docBody.insertParagraph(0, timestamp).setBold(true);
-              docBody.insertHorizontalRule(0);
-            } else { // Default to bottom
-              docBody.appendHorizontalRule();
-              docBody.appendParagraph(timestamp).setBold(true);
-              docBody.appendParagraph(data.notes);
-            }
-            Logger.log(`Appended to log file: "${logFileName}"`);
-          } else {
-            Logger.log(`Log file not found: "${logFileName}". Skipping.`);
-            continue; // Skip to the next file
-          }
-        
-        // Case 2: Bookmark
-        } else if (data.url && data.url.startsWith('http')) {
-          docTitle = `Bookmark${data.title ? ' - ' + data.title : ''}`;
-          newDoc = DocumentApp.create(docTitle);
-          docBody = newDoc.getBody();
-          addStandardDocHeader(newDoc, new Date(data.timestamp), data.title, data.url, "QNS Desktop");
-          docBody.appendParagraph(data.notes);
-          addStandardDocFooter(newDoc);
-          const newDocFile = DriveApp.getFileById(newDoc.getId());
-          targetFolder.addFile(newDocFile);
-          DriveApp.getRootFolder().removeFile(newDocFile);
-          Logger.log(`Created Google Doc from "${file.getName()}" at: ${newDoc.getUrl()}`);
-          
-        // Case 3: Simple Note
-        } else {
-          docTitle = `Note${data.title ? ' - ' + data.title : ''}`;
-          newDoc = DocumentApp.create(docTitle);
-          docBody = newDoc.getBody();
-          addStandardDocHeader(newDoc, new Date(data.timestamp), data.title, null, "QNS Desktop");
-          docBody.appendParagraph(data.notes);
-          addStandardDocFooter(newDoc);
-          const newDocFile = DriveApp.getFileById(newDoc.getId());
-          targetFolder.addFile(newDocFile);
-          DriveApp.getRootFolder().removeFile(newDocFile);
-          Logger.log(`Created Google Doc from "${file.getName()}" at: ${newDoc.getUrl()}`);
-        }
+          if (logFiles.hasNext()) {
+            const logDoc = DocumentApp.openById(logFiles.next().getId());
+            docBody = logDoc.getBody();
+            const timestamp = new Date(data.timestamp).toLocaleString();
+            
+            const logOrder = preferences["logOrder"]; 
+
+            if (logOrder === "newLogEntryAtTop") {
+              docBody.insertParagraph(0, data.body);
+              docBody.insertParagraph(0, timestamp).setBold(true);
+              docBody.insertParagraph(0, ""); // Add an empty line for separation
+              docBody.insertHorizontalRule(0);
+            } else { // Default to bottom
+              docBody.appendHorizontalRule();
+              docBody.appendParagraph(""); // Add an empty line for separation
+              docBody.appendParagraph(timestamp).setBold(true);
+              docBody.appendParagraph(data.body);
+            }
+            Logger.log(`Appended to log file: "${logFileName}"`);
+          } else {
+            Logger.log(`Log file not found: "${logFileName}". Creating new log file.`);
+            // Create a new log file if it doesn't exist
+            newDoc = DocumentApp.create(logFileName);
+            docBody = newDoc.getBody();
+            addStandardDocHeader(newDoc, new Date(data.timestamp), logFileName, null, "QNS Desktop Log");
+            docBody.appendParagraph(data.body);
+            addStandardDocFooter(newDoc);
+            const newDocFile = DriveApp.getFileById(newDoc.getId());
+            logsFolder.addFile(newDocFile);
+            DriveApp.getRootFolder().removeFile(newDocFile);
+            Logger.log(`Created new log file: "${logFileName}"`);
+          }
+        
+        // Case 2: Simple Note
+        } else if (data.type === 'note') {
+          docTitle = `Note${data.title ? ' - ' + data.title : ''}`;
+          newDoc = DocumentApp.create(docTitle);
+          docBody = newDoc.getBody();
+          addStandardDocHeader(newDoc, new Date(data.timestamp), data.title, null, "QNS Desktop");
+          docBody.appendParagraph(data.body);
+          addStandardDocFooter(newDoc);
+          const newDocFile = DriveApp.getFileById(newDoc.getId());
+          targetFolder.addFile(newDocFile);
+          DriveApp.getRootFolder().removeFile(newDocFile);
+          Logger.log(`Created Google Doc from "${file.getName()}" at: ${newDoc.getUrl()}`);
+        }
         
         file.setTrashed(true);
         Logger.log(`Trashed original file: "${file.getName()}"`);
@@ -657,7 +665,17 @@ function triggered_makeTagIndex() {
   if (existingFiles.hasNext()) {
     const file = existingFiles.next();
     doc = DocumentApp.openById(file.getId());
-    doc.getBody().setText('');
+    const body = doc.getBody();
+    // body.setText('');
+    const p = body.getParagraphs()[0];
+    if (p) {
+      const style = {};
+      style[DocumentApp.Attribute.LIST_ID] = null;
+      style[DocumentApp.Attribute.INDENT_START] = null;
+      style[DocumentApp.Attribute.INDENT_FIRST_LINE] = null;
+      p.setAttributes(style);
+      p.setHeading(DocumentApp.ParagraphHeading.NORMAL);
+    }
     // Trash other files with the same name in the same folder
     while(existingFiles.hasNext()){
       existingFiles.next().setTrashed(true);
