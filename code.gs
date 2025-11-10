@@ -1,4 +1,9 @@
 /**
+ * Quick Notes Suite - Trigger Code
+ * Copyright 2025 Mark A. Stout
+ * 
+ * see https://sites.google.com/view/quick-notes-suite
+ * 
  * @fileoverview Google App Script functions for the QuickNoteSuite Trigger Handler.
  * This script is intended to be a separate project from the main web app.
  * Its sole purpose is to run background tasks based on time-driven triggers.
@@ -31,8 +36,7 @@ function setupTriggers() {
   const triggerFunctions = [
     'triggered_processEmailsToDoc',
     'triggered_convertTextNotesToDoc',
-    'triggered_MoveKeepNotes',
-    'triggered_convertJsonNotesToDoc'
+    'triggered_MoveKeepNotes'
   ];
 
   triggerFunctions.forEach(function(functionName) {
@@ -354,111 +358,6 @@ function triggered_MoveKeepNotes() {
   }
 }
 
-function triggered_convertJsonNotesToDoc() {
-  if (!checkPreferencesFileExists()) { return; } 
-  Logger.log("Starting JSON note processing for QNS-Triggered.");
-
-  const preferences = loadPreferences();
-  if (!preferences || !preferences.notesFolder) {
-    Logger.log("Notes folder preference is missing. Aborting.");
-    return;
-  }
-
-  const targetFolder = getOrCreateFolder(DriveApp, preferences.notesFolder);
-  if (!targetFolder) {
-    Logger.log(`Could not find or create target notes folder. Aborting.`);
-    return;
-  }
-
-  try {
-    const files = targetFolder.getFilesByType('application/json');
-    let filesProcessed = 0;
-    while (files.hasNext()) {
-      const file = files.next();
-      try {
-        const fileContent = file.getBlob().getDataAsString();
-        const data = JSON.parse(fileContent);
-
-        let docTitle;
-        let newDoc;
-        let docBody;
-
-        // Case 1: Log Entry
-        if (data.type === 'log' || (data.type === 'note' && data.title === 'log')) {
-          let logFileName;
-          if (data.type === 'log') {
-            logFileName = data.category;
-          } else { // must be type 'note' and title 'log'
-            logFileName = data.title;
-          }
-
-          if (!logFileName) {
-            Logger.log(`JSON log object is missing a title or category. Skipping.`);
-            continue;
-          }
-          const logsFolder = getOrCreateFolder(targetFolder, "Logs");
-          const logFiles = logsFolder.getFilesByName(logFileName);
-
-          if (logFiles.hasNext()) {
-            const logDoc = DocumentApp.openById(logFiles.next().getId());
-            docBody = logDoc.getBody();
-            const timestamp = new Date(data.timestamp).toLocaleString();
-            
-            const logOrder = preferences["logOrder"]; 
-
-            if (logOrder === "newLogEntryAtTop") {
-              docBody.insertParagraph(0, data.body);
-              docBody.insertParagraph(0, timestamp).setBold(true);
-              docBody.insertParagraph(0, ""); // Add an empty line for separation
-              docBody.insertHorizontalRule(0);
-            } else { // Default to bottom
-              docBody.appendHorizontalRule();
-              docBody.appendParagraph(""); // Add an empty line for separation
-              docBody.appendParagraph(timestamp).setBold(true);
-              docBody.appendParagraph(data.body);
-            }
-            Logger.log(`Appended to log file: "${logFileName}"`);
-          } else {
-            Logger.log(`Log file not found: "${logFileName}". Creating new log file.`);
-            // Create a new log file if it doesn't exist
-            newDoc = DocumentApp.create(logFileName);
-            docBody = newDoc.getBody();
-            addStandardDocHeader(newDoc, new Date(data.timestamp), logFileName, null, "QNS Desktop Log");
-            docBody.appendParagraph(data.body);
-            addStandardDocFooter(newDoc);
-            const newDocFile = DriveApp.getFileById(newDoc.getId());
-            logsFolder.addFile(newDocFile);
-            DriveApp.getRootFolder().removeFile(newDocFile);
-            Logger.log(`Created new log file: "${logFileName}"`);
-          }
-        
-        // Case 2: Simple Note
-        } else if (data.type === 'note') {
-          docTitle = `Note${data.title ? ' - ' + data.title : ''}`;
-          newDoc = DocumentApp.create(docTitle);
-          docBody = newDoc.getBody();
-          addStandardDocHeader(newDoc, new Date(data.timestamp), data.title, null, "QNS Desktop");
-          docBody.appendParagraph(data.body);
-          addStandardDocFooter(newDoc);
-          const newDocFile = DriveApp.getFileById(newDoc.getId());
-          targetFolder.addFile(newDocFile);
-          DriveApp.getRootFolder().removeFile(newDocFile);
-          Logger.log(`Created Google Doc from "${file.getName()}" at: ${newDoc.getUrl()}`);
-        }
-        
-        file.setTrashed(true);
-        Logger.log(`Trashed original file: "${file.getName()}"`);
-        filesProcessed++;
-
-      } catch (fileProcessError) {
-        Logger.log(`ERROR: Could not process JSON file "${file.getName()}": ${fileProcessError.toString()}`);
-      }
-    }
-    Logger.log(`JSON note processing completed. ${filesProcessed} files converted.`);
-  } catch (e) {
-    Logger.log(`An error occurred during JSON notes processing: ${e.toString()}`);
-  }
-}
 
 
 // --- HELPER & DIAGNOSTIC FUNCTIONS ---
