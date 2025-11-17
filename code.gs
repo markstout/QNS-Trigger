@@ -565,16 +565,7 @@ function triggered_makeTagIndex() {
     const file = existingFiles.next();
     doc = DocumentApp.openById(file.getId());
     const body = doc.getBody();
-    // body.setText('');
-    const p = body.getParagraphs()[0];
-    if (p) {
-      const style = {};
-      style[DocumentApp.Attribute.LIST_ID] = null;
-      style[DocumentApp.Attribute.INDENT_START] = null;
-      style[DocumentApp.Attribute.INDENT_FIRST_LINE] = null;
-      p.setAttributes(style);
-      p.setHeading(DocumentApp.ParagraphHeading.NORMAL);
-    }
+    body.setText('');
     // Trash other files with the same name in the same folder
     while(existingFiles.hasNext()){
       existingFiles.next().setTrashed(true);
@@ -604,7 +595,7 @@ function triggered_makeTagIndex() {
   footerParagraph.setLinkUrl("https://sites.google.com/view/quick-notes-suite/home");
   footerParagraph.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
 
-  const startTimeText = 'Index Created at : ' + startTime.toLocaleString();
+  const startTimeText = 'Index Created at : ' + Utilities.formatDate(startTime, Session.getScriptTimeZone(), "MM/dd/yyyy, h:mm:ss a");
   body.appendParagraph(startTimeText);
 
   const endTime = new Date();
