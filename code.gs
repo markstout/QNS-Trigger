@@ -211,8 +211,14 @@ function triggered_processEmailsToDoc() {
               // Save to the ensured attachment folder
               const file = targetAttachmentFolder.createFile(attachment);
               const fileUrl = file.getUrl();
-              const attachmentParagraph = docBody.appendParagraph(`Attachment: ${attachmentName} - `);
-              attachmentParagraph.appendText(fileUrl).setLinkUrl(fileUrl);
+              const attachmentParagraph = docBody.appendParagraph(`Attachment: ${attachmentName} - ${fileUrl}`);
+              
+              const text = attachmentParagraph.editAsText();
+              const textLen = text.getText().length;
+              const urlLen = fileUrl.length;
+              
+              // Apply link only to the URL part at the end
+              text.setLinkUrl(textLen - urlLen, textLen - 1, fileUrl);
             }
           } catch (attachError) {
             Logger.log(`ERROR: Failed to process attachment "${attachmentName}": ${attachError.toString()}`);
@@ -403,7 +409,7 @@ function addStandardDocFooter(doc) {
   docBody.appendParagraph("");
   docBody.appendHorizontalRule();
   const footerParagraph = docBody.appendParagraph("Created with ");
-  footerParagraph.appendText("QuickNoteSuite").setLinkUrl("https://sites.google.com/view/notesondrive/home?authuser=0");
+  footerParagraph.appendText("Quick Notes Suite").setLinkUrl("https://sites.google.com/view/quick-notes-suite");
   footerParagraph.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
   footerParagraph.setBold(true);
   Logger.log("addStandardDocFooter: Footer added.");
