@@ -1,7 +1,7 @@
 /**
  * Quick Notes Suite - Trigger Code
  * Copyright 2025 Mark A. Stout
- * Last Updated : 11-29-2025
+ * Last Updated : 12-11-2025
  * see https://sites.google.com/view/quick-notes-suite
  * * @fileoverview Google App Script functions for the QuickNoteSuite Trigger Handler.
  * This script is intended to be a separate project from the main web app.
@@ -74,6 +74,26 @@ function setupTriggers() {
       .nearMinute(0)
       .create();
     Logger.log(`Successfully created daily 3 AM to 4 AM trigger for triggered_makeTagIndex (without error notifications).`);
+  }
+
+  try {
+    ScriptApp.newTrigger('triggered_dailyReport')
+      .timeBased()
+      .everyDays(1)
+      .atHour(3)
+      .nearMinute(0)
+      .withFailureNotificationFrequency(ScriptApp.FailureNotificationFrequency.HOURLY)
+      .create();
+    Logger.log(`Successfully created daily 3 AM to 4 AM trigger for triggered_dailyReport with hourly error notifications.`);
+  } catch (e) {
+    Logger.log(`Warning: Could not set failure notification frequency for triggered_dailyReport. Error: ${e.message}. Creating trigger without notification setting.`);
+    ScriptApp.newTrigger('triggered_dailyReport')
+      .timeBased()
+      .everyDays(1)
+      .atHour(3)
+      .nearMinute(0)
+      .create();
+    Logger.log(`Successfully created daily 3 AM to 4 AM trigger for triggered_dailyReport (without error notifications).`);
   }
   
   // After setting triggers, rename and move this script file for organization.
@@ -628,6 +648,215 @@ function triggered_makeTagIndex() {
       listItem.setLinkUrl(fileInfo.url);
     });
   });
+
+  doc.saveAndClose();
+}
+
+/**
+ * Trigger wrapper for Daily Report.
+ * Determines the target date based on current time (before 6 AM = yesterday, else today).
+ */
+function triggered_dailyReport() {
+  const now = new Date();
+  const currentHour = now.getHours();
+  let targetDate = new Date(now);
+
+  // If before 6 AM, Set target to Yesterday
+  if (currentHour < 6) {
+    targetDate.setDate(now.getDate() - 1);
+  }
+  // Otherwise, target remains Today
+
+  // Set start to 00:00:00
+  targetDate.setHours(0, 0, 0, 0);
+  const startDateTime = new Date(targetDate);
+
+  // Set end to 23:59:59
+  targetDate.setHours(23, 59, 59, 999);
+  const endDateTime = new Date(targetDate);
+
+  Logger.log(`Running Daily Report for date: ${startDateTime.toLocaleDateString()} (Window: ${startDateTime.toLocaleString()} - ${endDateTime.toLocaleString()})`);
+  
+  createDailyReport(startDateTime, endDateTime);
+}
+
+/**
+ * Generates a Daily Report Doc listing files created and modified in the given range.
+ * @param {Date} startDateTime
+ * @param {Date} endDateTime
+ */
+function createDailyReport(startDateTime, endDateTime) {
+  // Default to Today if no arguments provided (e.g. manual run)
+  if (!startDateTime || !endDateTime) {
+    const now = new Date();
+    startDateTime = new Date(now);
+    startDateTime.setHours(0, 0, 0, 0);
+    endDateTime = new Date(now);
+    endDateTime.setHours(23, 59, 59, 999);
+    Logger.log("Manual execution detected. Defaulting to Today: " + startDateTime.toLocaleDateString());
+  }
+
+  const startTime = new Date(); // For duration calculation
+  
+  const preferences = loadPreferences();
+  if (!preferences || !preferences.notesFolder) {
+    Logger.log("Notes folder preference is missing. Aborting Daily Report.");
+    return;
+  }
+  const folderName = preferences.notesFolder;
+  const folders = DriveApp.getFoldersByName(folderName);
+
+  if (!folders.hasNext()) {
+    Logger.log(`Folder '${folderName}' not found.`);
+    return;
+  }
+  
+  const notesFolder = folders.next();
+  
+  // Format Date for Title: YYYY-MM-DD (Manual formatting to avoid Utilities error)
+  const yyyy = startDateTime.getFullYear();
+  const mm = String(startDateTime.getMonth() + 1).padStart(2, '0');
+  const dd = String(startDateTime.getDate()).padStart(2, '0');
+  const dateString = `${yyyy}-${mm}-${dd}`;
+  const docTitle = `Daily Report - ${dateString}`;
+  
+  // Create NEW Document
+  const doc = DocumentApp.create(docTitle);
+  const file = DriveApp.getFileById(doc.getId());
+  notesFolder.addFile(file);
+  DriveApp.getRootFolder().removeFile(file);
+  Logger.log(`Created new Daily Report: "${docTitle}"`);
+
+  const body = doc.getBody();
+  
+  // --- Header/Title Setup (Matching Tag Index Style) ---
+  // Note: Newly created doc has one empty paragraph.
+  const titleParagraph = body.getParagraphs()[0];
+  titleParagraph.setText(`Daily Report: ${dateString}`);
+  titleParagraph.setHeading(DocumentApp.ParagraphHeading.TITLE);
+  
+  body.appendHorizontalRule();
+
+  // --- Footer Setup (Matching Tag Index Style) ---
+  let footer = doc.getFooter();
+  if (!footer) {
+    footer = doc.addFooter();
+  }
+  // Robust clear for footer (just in case, though new doc is empty)
+  const originalFooterChildren = footer.getNumChildren();
+  footer.appendParagraph("");
+  for (let i = 0; i < originalFooterChildren; i++) {
+    footer.getChild(0).removeFromParent();
+  }
+  
+  const footerTextPara = footer.getParagraphs()[0];
+  footerTextPara.setText('Generated by Quick Note Suite');
+  footerTextPara.setLinkUrl("https://sites.google.com/view/quick-notes-suite/home");
+  footerTextPara.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  footer.insertHorizontalRule(0);
+
+  // --- Stats Section ---
+  const reportTimeStr = `${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`; 
+  const startTimeText = 'Report Generated at : ' + reportTimeStr;
+  body.appendParagraph(startTimeText);
+
+  // Leave placeholder for duration, we will add it at the end? 
+  // Tag Index adds it at the top. We can just wait to capture it at the end?
+  // Actually, Tag Index calculates it at the end but appends it.
+  // We'll calculate it just before saving.
+  
+  const startHmm = `${String(startDateTime.getHours()).padStart(2,'0')}:${String(startDateTime.getMinutes()).padStart(2,'0')}`;
+  const endHmm = `${String(endDateTime.getHours()).padStart(2,'0')}:${String(endDateTime.getMinutes()).padStart(2,'0')}`;
+  body.appendParagraph(`Reporting Period: ${startHmm} - ${endHmm}`);
+
+  // --- Search Logic: Search Wide, Filter Locally ---
+  // Strategy: Query for ALL files modified on/after the start date.
+  // Then filter in memory to separate "Created" vs "Modified" within the specific window.
+  // This avoids flaky Drive API query syntax for 'createdDate' and exact timestamps.
+  
+  const timeZone = Session.getScriptTimeZone();
+  
+  // Helper to format YYYY-MM-DD
+  const formatDateSimple = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const da = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${da}`;
+  };
+
+  const startStr = formatDateSimple(startDateTime);
+  
+  // Broad Query: Everything touched on or after the target day.
+  // We use `modifiedDate` because any file created is also "modified" at that time.
+  // This captures the superset of what we need.
+  const broadQuery = `modifiedDate > '${startStr}' and trashed = false`;
+  Logger.log(`Broad Query: ${broadQuery}`);
+  
+  const filesIterator = DriveApp.searchFiles(broadQuery);
+  
+  const createdFilesList = [];
+  const modifiedFilesList = [];
+  
+  const startMs = startDateTime.getTime();
+  const endMs = endDateTime.getTime();
+  
+  while (filesIterator.hasNext()) {
+    const f = filesIterator.next();
+    const fCreated = f.getDateCreated();
+    const fUpdated = f.getLastUpdated();
+    
+    // Check if Created in Window
+    if (fCreated.getTime() >= startMs && fCreated.getTime() <= endMs) {
+      createdFilesList.push(f);
+    }
+    
+    // Check if Modified in Window
+    // User Update: Only list in "Files Modified" if it was created in an EARLIER period.
+    if (fUpdated.getTime() >= startMs && fUpdated.getTime() <= endMs && fCreated.getTime() < startMs) {
+      modifiedFilesList.push(f);
+    }
+  }
+
+  // 1. Output Files Created
+  body.appendParagraph("Files Created").setHeading(DocumentApp.ParagraphHeading.HEADING1);
+  if (createdFilesList.length === 0) {
+    body.appendParagraph("No files created in this period.");
+  } else {
+    createdFilesList.forEach(f => {
+      const fCreated = f.getDateCreated();
+      const fTimeStr = `${String(fCreated.getHours()).padStart(2,'0')}:${String(fCreated.getMinutes()).padStart(2,'0')}`;
+      const listItem = body.appendListItem(`${f.getName()} (${fTimeStr})`);
+      listItem.setLinkUrl(f.getUrl());
+    });
+  }
+
+  // 2. Output Files Modified
+  body.appendParagraph("Files Modified").setHeading(DocumentApp.ParagraphHeading.HEADING1);
+  if (modifiedFilesList.length === 0) {
+    body.appendParagraph("No files modified in this period.");
+  } else {
+    modifiedFilesList.forEach(f => {
+      const fUpdated = f.getLastUpdated();
+      const fUpTimeStr = `${String(fUpdated.getHours()).padStart(2,'0')}:${String(fUpdated.getMinutes()).padStart(2,'0')}`;
+      const listItem = body.appendListItem(`${f.getName()} (${fUpTimeStr})`);
+      listItem.setLinkUrl(f.getUrl());
+    });
+  }
+  
+  // --- Duration ---
+  const endTime = new Date();
+  const duration = (endTime.getTime() - startTime.getTime()) / 1000;
+  const durationText = 'Duration of Run: ' + duration + ' seconds';
+  // Insert duration near top (after start time)
+  body.insertParagraph(4, durationText); // Index ~4 depends on header rules.
+  // Actually Tag index appended it. I'll append it for simplicity closely matching "Tag Index".
+  // "It will have a section listing docs... It will create a doc formatted like the Tag Index"
+  // Tag index structure: Title, HR, Start Time, Duration.
+  // My structure so far: Title, HR, Start Time, Range, [Content].
+  // I'll insert Duration after Start Time.
+  // children indices: 0=Title, 1=HR, 2=Start Time, 3=Range...
+  // So insert at 3.
+  body.insertParagraph(3, durationText);
 
   doc.saveAndClose();
 }
