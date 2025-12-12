@@ -713,6 +713,10 @@ function createDailyReport(startDateTime, endDateTime) {
   
   const notesFolder = folders.next();
   
+  // Custom Folder Logic: Check for 'dailyReports' preference
+  const reportFolderName = preferences.dailyReports || "Daily Reports";
+  const reportFolder = getOrCreateFolder(notesFolder, reportFolderName);
+  
   // Format Date for Title: YYYY-MM-DD (Manual formatting to avoid Utilities error)
   const yyyy = startDateTime.getFullYear();
   const mm = String(startDateTime.getMonth() + 1).padStart(2, '0');
@@ -723,9 +727,11 @@ function createDailyReport(startDateTime, endDateTime) {
   // Create NEW Document
   const doc = DocumentApp.create(docTitle);
   const file = DriveApp.getFileById(doc.getId());
-  notesFolder.addFile(file);
+  
+  // Add to the specific report folder, NOT just the main notes folder
+  reportFolder.addFile(file);
   DriveApp.getRootFolder().removeFile(file);
-  Logger.log(`Created new Daily Report: "${docTitle}"`);
+  Logger.log(`Created new Daily Report: "${docTitle}" in folder "${reportFolderName}"`);
 
   const body = doc.getBody();
   
