@@ -575,8 +575,12 @@ function triggered_makeTagIndex() {
   // --- FIX START ---
   const body = doc.getBody();
   
-  // 1. Clear the body. This leaves exactly ONE empty paragraph.
-  body.clear();
+  // 1. Robust Clear: Append safe paragraph, delete old content.
+  const originalBodyChildren = body.getNumChildren();
+  body.appendParagraph("");
+  for (let i = 0; i < originalBodyChildren; i++) {
+    body.getChild(0).removeFromParent();
+  }
   
   // 2. Reuse that existing empty paragraph for the Title.
   const titleParagraph = body.getParagraphs()[0];
@@ -591,8 +595,12 @@ function triggered_makeTagIndex() {
     footer = doc.addFooter();
   }
   
-  // 1. Clear the footer. This leaves exactly ONE empty paragraph.
-  footer.clear();
+  // 1. Robust Clear: Append safe paragraph, delete old content.
+  const originalFooterChildren = footer.getNumChildren();
+  footer.appendParagraph("");
+  for (let i = 0; i < originalFooterChildren; i++) {
+    footer.getChild(0).removeFromParent();
+  }
   
   // 2. Reuse that existing empty paragraph for the text.
   const footerTextPara = footer.getParagraphs()[0];
