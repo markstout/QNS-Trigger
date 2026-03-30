@@ -848,18 +848,211 @@ function createDailyReport(startDateTime, endDateTime) {
       listItem.setLinkUrl(f.getUrl());
     });
   }
+
+  // --- Calendar Events for Today ---
+  body.appendParagraph("Calendar Events for Today").setHeading(DocumentApp.ParagraphHeading.HEADING1);
+  try {
+    // SWITCH TO ADVANCED API to get 'htmlLink'
+    const optionalArgs = {
+      timeMin: startDateTime.toISOString(),
+      timeMax: endDateTime.toISOString(),
+      showDeleted: false,
+      singleEvents: true, // Use singleEvents to expand recurring instances correctly for "Today"
+      orderBy: 'startTime'
+    };
+    
+    // Note: Use 'Calendar' service, not 'CalendarApp'
+    const response = Calendar.Events.list('primary', optionalArgs);
+    
+    if (response.items && response.items.length > 0) {
+      response.items.forEach(event => {
+        let eTimeStr = "All Day";
+        if (event.start.dateTime) {
+          const eStart = new Date(event.start.dateTime);
+          eTimeStr = `${String(eStart.getHours()).padStart(2,'0')}:${String(eStart.getMinutes()).padStart(2,'0')}`;
+        }
+        
+        const listItem = body.appendListItem(`${eTimeStr} - ${event.summary}`);
+        if (event.htmlLink) {
+          listItem.setLinkUrl(event.htmlLink);
+        }
+      });
+    } else {
+      body.appendParagraph("No events scheduled for this period.");
+    }
+
+  } catch (e) {
+    if (e.message && e.message.includes("Calendar is not defined")) {
+      body.appendParagraph("Advanced Calendar Service not enabled. To fix: Script Editor > Services > Add 'Google Calendar API'.");
+    } else {
+       body.appendParagraph(`Error retrieving calendar events: ${e.message}`);
+    }
+  }
+
+  // --- Calendar Events Created Today ---
+  body.appendParagraph("Calendar Events Created Today").setHeading(DocumentApp.ParagraphHeading.HEADING1);
+  try {
+    const optionalArgs = {
+      timeMin: startDateTime.toISOString(),
+      updatedMin: startDateTime.toISOString(),
+      showDeleted: false,
+      singleEvents: false // We want the actual event definition
+    };
+    
+    const response = Calendar.Events.list('primary', optionalArgs);
+    const createdEvents = [];
+    
+    if (response.items && response.items.length > 0) {
+      const startMs = startDateTime.getTime();
+      const endMs = endDateTime.getTime();
+      
+      response.items.forEach(item => {
+        const createdDate = new Date(item.created);
+        if (createdDate.getTime() >= startMs && createdDate.getTime() <= endMs) {
+          createdEvents.push(item);
+        }
+      });
+    }
+
+    if (createdEvents.length === 0) {
+      body.appendParagraph("No events created in this period.");
+    } else {
+      createdEvents.forEach(item => {
+        const cDate = new Date(item.created);
+        const cTimeStr = `${String(cDate.getHours()).padStart(2,'0')}:${String(cDate.getMinutes()).padStart(2,'0')}`;
+        
+        let eventDateStr = "[No Date]";
+        if (item.start) {
+          if (item.start.dateTime) {
+             eventDateStr = new Date(item.start.dateTime).toLocaleDateString();
+          } else if (item.start.date) {
+             eventDateStr = item.start.date; 
+          }
+        }
+        
+        const listItem = body.appendListItem(`${cTimeStr} - ${item.summary} [Scheduled: ${eventDateStr}]`);
+        if (item.htmlLink) {
+          listItem.setLinkUrl(item.htmlLink);
+        }
+      });
+    }
+
+  } catch (e) {
+     if (e.message && e.message.includes("Calendar is not defined")) {
+      body.appendParagraph("Advanced Calendar Service not enabled.");
+    } else {
+       body.appendParagraph(`Error retrieving created events: ${e.message}`);
+    }
+  }
+
+  // --- Tasks Completed Today ---
+  body.appendParagraph("Tasks Completed Today").setHeading(DocumentApp.ParagraphHeading.HEADING1);
+  try {
+      // Get Default Task List
+      const taskLists = Tasks.Tasklists.list();
+      if (taskLists.items && taskLists.items.length > 0) {
+          const taskListId = taskLists.items[0].id; // Default list
+          
+          const optionalArgs = {
+              showCompleted: true,
+              showHidden: true
+          };
+          const tasks = Tasks.Tasks.list(taskListId, optionalArgs);
+          
+          const completedTasks = [];
+          const startMs = startDateTime.getTime();
+          const endMs = endDateTime.getTime();
+          
+          if (tasks.items) {
+             tasks.items.forEach(task => {
+                 if (task.status === 'completed' && task.completed) {
+                     const completedDate = new Date(task.completed);
+                     // Check if completed within our report window
+                     if (completedDate.getTime() >= startMs && completedDate.getTime() <= endMs) {
+                         completedTasks.push(task);
+                     }
+                 }
+             });
+          }
+          
+          if (completedTasks.length === 0) {
+              body.appendParagraph("No tasks completed in this period.");
+          } else {
+              completedTasks.forEach(task => {
+                  const cUp = new Date(task.completed);
+                   const cTimeStr = `${String(cUp.getHours()).padStart(2,'0')}:${String(cUp.getMinutes()).padStart(2,'0')}`;
+                  const listItem = body.appendListItem(`${cTimeStr} - ${task.title}`);
+                   if (task.webViewLink) {
+                       listItem.setLinkUrl(task.webViewLink);
+                   }
+              });
+          }
+
+      } else {
+           body.appendParagraph("No Task Lists found.");
+      }
+
+  } catch (e) {
+      if (e.message && e.message.includes("Tasks is not defined")) {
+          body.appendParagraph("Advanced Tasks Service not enabled. To fix: Script Editor > Services > Add 'Google Tasks API'.");
+      } else {
+          body.appendParagraph(`Error retrieving completed tasks: ${e.message}`);
+      }
+  }
+
+  // --- Tasks Created / Active Today ---
+  // API Restriction: No "created" date. showing "Active/Modified" tasks instead.
+  body.appendParagraph("Tasks Active/Modified Today (Not Completed)").setHeading(DocumentApp.ParagraphHeading.HEADING1);
+  try {
+       const taskLists = Tasks.Tasklists.list();
+      if (taskLists.items && taskLists.items.length > 0) {
+          const taskListId = taskLists.items[0].id; 
+           const optionalArgs = {
+              showCompleted: false, // Only active
+              showHidden: true
+          };
+          const tasks = Tasks.Tasks.list(taskListId, optionalArgs);
+          const activeTasks = [];
+          const startMs = startDateTime.getTime();
+          const endMs = endDateTime.getTime();
+
+          if (tasks.items) {
+               tasks.items.forEach(task => {
+                   const updatedDate = new Date(task.updated);
+                   // Ensure it was touched today
+                   if (updatedDate.getTime() >= startMs && updatedDate.getTime() <= endMs) {
+                       activeTasks.push(task);
+                   }
+               });
+          }
+          
+          if (activeTasks.length === 0) {
+              body.appendParagraph("No active tasks modified in this period.");
+          } else {
+               activeTasks.forEach(task => {
+                  const uUp = new Date(task.updated);
+                  const uTimeStr = `${String(uUp.getHours()).padStart(2,'0')}:${String(uUp.getMinutes()).padStart(2,'0')}`;
+                  const listItem = body.appendListItem(`${uTimeStr} - ${task.title}`);
+                   if (task.webViewLink) {
+                       listItem.setLinkUrl(task.webViewLink);
+                   }
+              });
+          }
+      }
+
+  } catch (e) {
+      if (e.message && e.message.includes("Tasks is not defined")) {
+          body.appendParagraph("Advanced Tasks Service not enabled.");
+      } else {
+          body.appendParagraph(`Error retrieving active tasks: ${e.message}`);
+      }
+  }
   
   // --- Duration ---
   const endTime = new Date();
   const duration = (endTime.getTime() - startTime.getTime()) / 1000;
   const durationText = 'Duration of Run: ' + duration + ' seconds';
   // Insert duration near top (after start time)
-  body.insertParagraph(4, durationText); // Index ~4 depends on header rules.
-  // Actually Tag index appended it. I'll append it for simplicity closely matching "Tag Index".
-  // "It will have a section listing docs... It will create a doc formatted like the Tag Index"
-  // Tag index structure: Title, HR, Start Time, Duration.
-  // My structure so far: Title, HR, Start Time, Range, [Content].
-  // I'll insert Duration after Start Time.
   // children indices: 0=Title, 1=HR, 2=Start Time, 3=Range...
   // So insert at 3.
   body.insertParagraph(3, durationText);
