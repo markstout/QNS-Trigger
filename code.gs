@@ -553,6 +553,46 @@ function listTextFilesInNotesFolder() {
 }
 
 
+/**
+ * Recursively scans a folder and its subfolders for files containing the tag marker in their title.
+ * Excludes folders listed in excludeFolderNames.
+ */
+function getFilesRecursive(folder, taggedFiles, excludeFolderNames, marker) {
+  const folderName = folder.getName();
+  if (excludeFolderNames.indexOf(folderName) !== -1) {
+    return;
+  }
+
+  const escapedMarker = marker.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+  const tagRegex = new RegExp(escapedMarker + '(\\w+)', 'g');
+
+  const files = folder.getFiles();
+  while (files.hasNext()) {
+    const file = files.next();
+    const title = file.getName();
+    if (title.includes(marker)) {
+      const tags = title.match(tagRegex);
+      if (tags) {
+        Logger.log(`Found tagged file: "${title}" in folder "${folderName}" with tags: ${tags.join(', ')}`);
+        tags.forEach(tag => {
+          const tagName = tag.substring(marker.length);
+          if (!taggedFiles[tagName]) {
+            taggedFiles[tagName] = [];
+          }
+          if (!taggedFiles[tagName].some(f => f.url === file.getUrl())) {
+            taggedFiles[tagName].push({title: title, url: file.getUrl()});
+          }
+        });
+      }
+    }
+  }
+
+  const subfolders = folder.getFolders();
+  while (subfolders.hasNext()) {
+    getFilesRecursive(subfolders.next(), taggedFiles, excludeFolderNames, marker);
+  }
+}
+
 function triggered_makeTagIndex() {
   const startTime = new Date();
   
@@ -570,26 +610,17 @@ function triggered_makeTagIndex() {
   }
 
   const notesFolder = folders.next();
-  const files = notesFolder.getFiles();
+  Logger.log(`Target notes folder: "${notesFolder.getName()}" (ID: ${notesFolder.getId()})`);
+  
+  const marker = preferences.indexTagMarker || '##';
   const taggedFiles = {};
+  const excludeFolders = [
+    preferences.dailyReports || "Daily Reports",
+    preferences.logFolder || "Logs",
+    "System Files - DO NOT DELETE OR EDIT"
+  ];
 
-  while (files.hasNext()) {
-    const file = files.next();
-    const title = file.getName();
-
-    if (title.includes('##')) {
-      const tags = title.match(/##(\w+)/g);
-      if (tags) {
-        tags.forEach(tag => {
-          const tagName = tag.substring(2);
-          if (!taggedFiles[tagName]) {
-            taggedFiles[tagName] = [];
-          }
-          taggedFiles[tagName].push({title: title, url: file.getUrl()});
-        });
-      }
-    }
-  }
+  getFilesRecursive(notesFolder, taggedFiles, excludeFolders, marker);
 
   const sortedTags = Object.keys(taggedFiles).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
 
@@ -598,7 +629,7 @@ function triggered_makeTagIndex() {
     return;
   }
 
-  const docName = 'Tags Index';
+  const docName = 'Tag Index';
   const existingFiles = notesFolder.getFilesByName(docName);
   let doc;
 
@@ -630,7 +661,7 @@ function triggered_makeTagIndex() {
   
   // 2. Reuse that existing empty paragraph for the Title.
   const titleParagraph = body.getParagraphs()[0];
-  titleParagraph.setText('Tags Index');
+  titleParagraph.setText('Tag Index');
   titleParagraph.setHeading(DocumentApp.ParagraphHeading.TITLE);
   
   body.appendHorizontalRule();
@@ -704,6 +735,9 @@ function triggered_dailyReport() {
   Logger.log(`Running Daily Report for date: ${startDateTime.toLocaleDateString()} (Window: ${startDateTime.toLocaleString()} - ${endDateTime.toLocaleString()})`);
   
   createDailyReport(startDateTime, endDateTime);
+  
+  Logger.log("Creating/updating Tag Index...");
+  triggered_makeTagIndex();
 }
 
 /**
