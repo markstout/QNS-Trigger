@@ -1,7 +1,7 @@
 /**
  * Quick Notes Suite - Trigger Code
  * Copyright 2025 Mark A. Stout
- * Last Updated : 12-11-2025
+ * Last Updated : 3-30-2026
  * see https://sites.google.com/view/quick-notes-suite
  * * @fileoverview Google App Script functions for the QuickNoteSuite Trigger Handler.
  * This script is intended to be a separate project from the main web app.
@@ -13,6 +13,11 @@
  * 3. After a user has completed the web app setup, run the `setupTriggers` 
  * function MANUALLY from the script editor ONCE for that user's account.
  */
+
+// --- GLOBAL CONSTANTS ---
+const PREFERENCE_FILE_NAME = 'QuickNoteSuitePreferences-Do-not-Delete-or-Edit';
+const PREFERENCE_PARENT_FOLDER_NAME = 'Notes2';
+const PREFERENCE_SUB_FOLDER_NAME = 'System Files - DO NOT DELETE OR EDIT';
 
 // --- MASTER SETUP FUNCTION ---
 
@@ -102,7 +107,7 @@ function setupTriggers() {
     const preferences = loadPreferences();
     if (preferences && preferences.notesFolder) {
       const notesFolderName = preferences.notesFolder;
-      const systemFolderName = 'System Files - DO NOT DELETE OR EDIT';
+      const systemFolderName = PREFERENCE_SUB_FOLDER_NAME;
 
       const parentFolders = DriveApp.getFoldersByName(notesFolderName);
       if (parentFolders.hasNext()) {
@@ -441,11 +446,29 @@ function checkPreferencesFileExists() {
 }
 
 function loadPreferences() {
-  const fileName = 'QuickNoteSuitePreferences-Do-not-Delete-or-Edit';
-  const parentFolderName = 'Notes';
-  const subFolderName = 'System Files - DO NOT DELETE OR EDIT';
+  const fileName = PREFERENCE_FILE_NAME;
+  const parentFolderName = PREFERENCE_PARENT_FOLDER_NAME;
+  const subFolderName = PREFERENCE_SUB_FOLDER_NAME;
 
   try {
+    // Check if the system folder exists more than once globally
+    const systemFoldersGlobal = DriveApp.getFoldersByName(subFolderName);
+    let systemFolderCount = 0;
+    while (systemFoldersGlobal.hasNext()) {
+      systemFoldersGlobal.next();
+      systemFolderCount++;
+    }
+    if (systemFolderCount > 1) {
+      const errMsg = `Error: The system folder "${subFolderName}" exists more than once on your Google Drive. Please ensure it exists only once.`;
+      Logger.log(errMsg);
+      try {
+        SpreadsheetApp.getUi().alert(errMsg);
+      } catch (uiError) {
+        // UI not available (e.g. background trigger execution)
+      }
+      throw new Error(errMsg);
+    }
+
     const parentFolders = DriveApp.getFoldersByName(parentFolderName);
     if (!parentFolders.hasNext()) {
       Logger.log(`Preferences Error: The primary folder "${parentFolderName}" was not found.`);
@@ -469,6 +492,9 @@ function loadPreferences() {
     }
   } catch (e) {
     Logger.log(`A critical error occurred while loading preferences: ${e.toString()}`);
+    if (e.message && e.message.includes("exists more than once")) {
+      throw e;
+    }
     return null;
   }
 }
@@ -682,8 +708,7 @@ function triggered_dailyReport() {
 
 /**
  * Generates a Daily Report Doc listing files created and modified in the given range.
- * @param {Date} startDateTime
- * @param {Date} endDateTime
+ * Time [HH:mm] is plain text and not part of the clickable link.
  */
 function createDailyReport(startDateTime, endDateTime) {
   // Default to Today if no arguments provided (e.g. manual run)
@@ -696,7 +721,7 @@ function createDailyReport(startDateTime, endDateTime) {
     Logger.log("Manual execution detected. Defaulting to Today: " + startDateTime.toLocaleDateString());
   }
 
-  const startTime = new Date(); // For duration calculation
+  const startTime = new Date(); 
   
   const preferences = loadPreferences();
   if (!preferences || !preferences.notesFolder) {
@@ -712,49 +737,36 @@ function createDailyReport(startDateTime, endDateTime) {
   }
   
   const notesFolder = folders.next();
-  
-  // Custom Folder Logic: Check for 'dailyReports' preference
   const reportFolderName = preferences.dailyReports || "Daily Reports";
   const reportFolder = getOrCreateFolder(notesFolder, reportFolderName);
   
-  // Format Date for Title: YYYY-MM-DD (Manual formatting to avoid Utilities error)
   const yyyy = startDateTime.getFullYear();
   const mm = String(startDateTime.getMonth() + 1).padStart(2, '0');
   const dd = String(startDateTime.getDate()).padStart(2, '0');
   const dateString = `${yyyy}-${mm}-${dd}`;
   const docTitle = `Daily Report - ${dateString}`;
   
-  // Create NEW Document
   const doc = DocumentApp.create(docTitle);
   const file = DriveApp.getFileById(doc.getId());
   
-  // Add to the specific report folder, NOT just the main notes folder
   reportFolder.addFile(file);
   DriveApp.getRootFolder().removeFile(file);
-  Logger.log(`Created new Daily Report: "${docTitle}" in folder "${reportFolderName}"`);
 
   const body = doc.getBody();
   
-  // --- Header/Title Setup (Matching Tag Index Style) ---
-  // Note: Newly created doc has one empty paragraph.
+  // --- Header/Title Setup ---
   const titleParagraph = body.getParagraphs()[0];
   titleParagraph.setText(`Daily Report: ${dateString}`);
   titleParagraph.setHeading(DocumentApp.ParagraphHeading.TITLE);
-  
   body.appendHorizontalRule();
 
-  // --- Footer Setup (Matching Tag Index Style) ---
-  let footer = doc.getFooter();
-  if (!footer) {
-    footer = doc.addFooter();
-  }
-  // Robust clear for footer (just in case, though new doc is empty)
+  // --- Footer Setup ---
+  let footer = doc.getFooter() || doc.addFooter();
   const originalFooterChildren = footer.getNumChildren();
   footer.appendParagraph("");
   for (let i = 0; i < originalFooterChildren; i++) {
     footer.getChild(0).removeFromParent();
   }
-  
   const footerTextPara = footer.getParagraphs()[0];
   footerTextPara.setText('Generated by Quick Note Suite');
   footerTextPara.setLinkUrl("https://sites.google.com/view/quick-notes-suite/home");
@@ -763,46 +775,17 @@ function createDailyReport(startDateTime, endDateTime) {
 
   // --- Stats Section ---
   const reportTimeStr = `${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`; 
-  const startTimeText = 'Report Generated at : ' + reportTimeStr;
-  body.appendParagraph(startTimeText);
-
-  // Leave placeholder for duration, we will add it at the end? 
-  // Tag Index adds it at the top. We can just wait to capture it at the end?
-  // Actually, Tag Index calculates it at the end but appends it.
-  // We'll calculate it just before saving.
-  
+  body.appendParagraph('Report Generated at : ' + reportTimeStr);
   const startHmm = `${String(startDateTime.getHours()).padStart(2,'0')}:${String(startDateTime.getMinutes()).padStart(2,'0')}`;
   const endHmm = `${String(endDateTime.getHours()).padStart(2,'0')}:${String(endDateTime.getMinutes()).padStart(2,'0')}`;
   body.appendParagraph(`Reporting Period: ${startHmm} - ${endHmm}`);
 
-  // --- Search Logic: Search Wide, Filter Locally ---
-  // Strategy: Query for ALL files modified on/after the start date.
-  // Then filter in memory to separate "Created" vs "Modified" within the specific window.
-  // This avoids flaky Drive API query syntax for 'createdDate' and exact timestamps.
-  
-  const timeZone = Session.getScriptTimeZone();
-  
-  // Helper to format YYYY-MM-DD
-  const formatDateSimple = (d) => {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const da = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${da}`;
-  };
-
-  const startStr = formatDateSimple(startDateTime);
-  
-  // Broad Query: Everything touched on or after the target day.
-  // We use `modifiedDate` because any file created is also "modified" at that time.
-  // This captures the superset of what we need.
-  const broadQuery = `modifiedDate > '${startStr}' and trashed = false`;
-  Logger.log(`Broad Query: ${broadQuery}`);
-  
+  // --- Drive File Logic ---
+  const broadQuery = `modifiedDate > '${yyyy}-${mm}-${dd}' and trashed = false`;
   const filesIterator = DriveApp.searchFiles(broadQuery);
   
   const createdFilesList = [];
   const modifiedFilesList = [];
-  
   const startMs = startDateTime.getTime();
   const endMs = endDateTime.getTime();
   
@@ -811,58 +794,54 @@ function createDailyReport(startDateTime, endDateTime) {
     const fCreated = f.getDateCreated();
     const fUpdated = f.getLastUpdated();
     
-    // Check if Created in Window
     if (fCreated.getTime() >= startMs && fCreated.getTime() <= endMs) {
       createdFilesList.push(f);
     }
-    
-    // Check if Modified in Window
-    // User Update: Only list in "Files Modified" if it was created in an EARLIER period.
     if (fUpdated.getTime() >= startMs && fUpdated.getTime() <= endMs && fCreated.getTime() < startMs) {
       modifiedFilesList.push(f);
     }
   }
 
-  // 1. Output Files Created
+  // Chronological Sort
+  createdFilesList.sort((a, b) => a.getDateCreated().getTime() - b.getDateCreated().getTime());
+  modifiedFilesList.sort((a, b) => a.getLastUpdated().getTime() - b.getLastUpdated().getTime());
+
+  // 1. Files Created
   body.appendParagraph("Files Created").setHeading(DocumentApp.ParagraphHeading.HEADING1);
   if (createdFilesList.length === 0) {
     body.appendParagraph("No files created in this period.");
   } else {
     createdFilesList.forEach(f => {
-      const fCreated = f.getDateCreated();
-      const fTimeStr = `${String(fCreated.getHours()).padStart(2,'0')}:${String(fCreated.getMinutes()).padStart(2,'0')}`;
-      const listItem = body.appendListItem(`${f.getName()} (${fTimeStr})`);
-      listItem.setLinkUrl(f.getUrl());
+      const fTime = f.getDateCreated();
+      const timeStr = `${String(fTime.getHours()).padStart(2,'0')}:${String(fTime.getMinutes()).padStart(2,'0')}`;
+      const listItem = body.appendListItem(`[${timeStr}] `);
+      listItem.appendText(f.getName()).setLinkUrl(f.getUrl());
     });
   }
 
-  // 2. Output Files Modified
+  // 2. Files Modified
   body.appendParagraph("Files Modified").setHeading(DocumentApp.ParagraphHeading.HEADING1);
   if (modifiedFilesList.length === 0) {
     body.appendParagraph("No files modified in this period.");
   } else {
     modifiedFilesList.forEach(f => {
-      const fUpdated = f.getLastUpdated();
-      const fUpTimeStr = `${String(fUpdated.getHours()).padStart(2,'0')}:${String(fUpdated.getMinutes()).padStart(2,'0')}`;
-      const listItem = body.appendListItem(`${f.getName()} (${fUpTimeStr})`);
-      listItem.setLinkUrl(f.getUrl());
+      const fTime = f.getLastUpdated();
+      const timeStr = `${String(fTime.getHours()).padStart(2,'0')}:${String(fTime.getMinutes()).padStart(2,'0')}`;
+      const listItem = body.appendListItem(`[${timeStr}] `);
+      listItem.appendText(f.getName()).setLinkUrl(f.getUrl());
     });
   }
 
-  // --- Calendar Events for Today ---
+  // --- Calendar Events Today ---
   body.appendParagraph("Calendar Events for Today").setHeading(DocumentApp.ParagraphHeading.HEADING1);
   try {
-    // SWITCH TO ADVANCED API to get 'htmlLink'
-    const optionalArgs = {
+    const response = Calendar.Events.list('primary', {
       timeMin: startDateTime.toISOString(),
       timeMax: endDateTime.toISOString(),
       showDeleted: false,
-      singleEvents: true, // Use singleEvents to expand recurring instances correctly for "Today"
+      singleEvents: true,
       orderBy: 'startTime'
-    };
-    
-    // Note: Use 'Calendar' service, not 'CalendarApp'
-    const response = Calendar.Events.list('primary', optionalArgs);
+    });
     
     if (response.items && response.items.length > 0) {
       response.items.forEach(event => {
@@ -871,191 +850,107 @@ function createDailyReport(startDateTime, endDateTime) {
           const eStart = new Date(event.start.dateTime);
           eTimeStr = `${String(eStart.getHours()).padStart(2,'0')}:${String(eStart.getMinutes()).padStart(2,'0')}`;
         }
-        
-        const listItem = body.appendListItem(`${eTimeStr} - ${event.summary}`);
-        if (event.htmlLink) {
-          listItem.setLinkUrl(event.htmlLink);
-        }
+        const listItem = body.appendListItem(`[${eTimeStr}] `);
+        listItem.appendText(event.summary).setLinkUrl(event.htmlLink || null);
       });
     } else {
-      body.appendParagraph("No events scheduled for this period.");
+      body.appendParagraph("No events scheduled.");
     }
-
   } catch (e) {
-    if (e.message && e.message.includes("Calendar is not defined")) {
-      body.appendParagraph("Advanced Calendar Service not enabled. To fix: Script Editor > Services > Add 'Google Calendar API'.");
-    } else {
-       body.appendParagraph(`Error retrieving calendar events: ${e.message}`);
-    }
+    body.appendParagraph(`Calendar access error: ${e.message}`);
   }
 
   // --- Calendar Events Created Today ---
   body.appendParagraph("Calendar Events Created Today").setHeading(DocumentApp.ParagraphHeading.HEADING1);
   try {
-    const optionalArgs = {
+    const response = Calendar.Events.list('primary', {
       timeMin: startDateTime.toISOString(),
       updatedMin: startDateTime.toISOString(),
       showDeleted: false,
-      singleEvents: false // We want the actual event definition
-    };
+      singleEvents: false 
+    });
     
-    const response = Calendar.Events.list('primary', optionalArgs);
-    const createdEvents = [];
-    
-    if (response.items && response.items.length > 0) {
-      const startMs = startDateTime.getTime();
-      const endMs = endDateTime.getTime();
-      
-      response.items.forEach(item => {
-        const createdDate = new Date(item.created);
-        if (createdDate.getTime() >= startMs && createdDate.getTime() <= endMs) {
-          createdEvents.push(item);
-        }
-      });
-    }
+    let createdEvents = (response.items || []).filter(item => {
+      const cDate = new Date(item.created).getTime();
+      return cDate >= startMs && cDate <= endMs;
+    }).sort((a, b) => new Date(a.created).getTime() - new Date(b.created).getTime());
 
     if (createdEvents.length === 0) {
-      body.appendParagraph("No events created in this period.");
+      body.appendParagraph("No events created.");
     } else {
       createdEvents.forEach(item => {
         const cDate = new Date(item.created);
         const cTimeStr = `${String(cDate.getHours()).padStart(2,'0')}:${String(cDate.getMinutes()).padStart(2,'0')}`;
-        
-        let eventDateStr = "[No Date]";
-        if (item.start) {
-          if (item.start.dateTime) {
-             eventDateStr = new Date(item.start.dateTime).toLocaleDateString();
-          } else if (item.start.date) {
-             eventDateStr = item.start.date; 
-          }
-        }
-        
-        const listItem = body.appendListItem(`${cTimeStr} - ${item.summary} [Scheduled: ${eventDateStr}]`);
-        if (item.htmlLink) {
-          listItem.setLinkUrl(item.htmlLink);
-        }
+        const listItem = body.appendListItem(`[${cTimeStr}] `);
+        listItem.appendText(item.summary).setLinkUrl(item.htmlLink || null);
       });
     }
-
   } catch (e) {
-     if (e.message && e.message.includes("Calendar is not defined")) {
-      body.appendParagraph("Advanced Calendar Service not enabled.");
-    } else {
-       body.appendParagraph(`Error retrieving created events: ${e.message}`);
-    }
+    body.appendParagraph(`Created events error: ${e.message}`);
   }
 
   // --- Tasks Completed Today ---
   body.appendParagraph("Tasks Completed Today").setHeading(DocumentApp.ParagraphHeading.HEADING1);
   try {
-      // Get Default Task List
-      const taskLists = Tasks.Tasklists.list();
-      if (taskLists.items && taskLists.items.length > 0) {
-          const taskListId = taskLists.items[0].id; // Default list
-          
-          const optionalArgs = {
-              showCompleted: true,
-              showHidden: true
-          };
-          const tasks = Tasks.Tasks.list(taskListId, optionalArgs);
-          
-          const completedTasks = [];
-          const startMs = startDateTime.getTime();
-          const endMs = endDateTime.getTime();
-          
-          if (tasks.items) {
-             tasks.items.forEach(task => {
-                 if (task.status === 'completed' && task.completed) {
-                     const completedDate = new Date(task.completed);
-                     // Check if completed within our report window
-                     if (completedDate.getTime() >= startMs && completedDate.getTime() <= endMs) {
-                         completedTasks.push(task);
-                     }
-                 }
-             });
-          }
-          
-          if (completedTasks.length === 0) {
-              body.appendParagraph("No tasks completed in this period.");
-          } else {
-              completedTasks.forEach(task => {
-                  const cUp = new Date(task.completed);
-                   const cTimeStr = `${String(cUp.getHours()).padStart(2,'0')}:${String(cUp.getMinutes()).padStart(2,'0')}`;
-                  const listItem = body.appendListItem(`${cTimeStr} - ${task.title}`);
-                   if (task.webViewLink) {
-                       listItem.setLinkUrl(task.webViewLink);
-                   }
-              });
-          }
+    const taskLists = Tasks.Tasklists.list();
+    if (taskLists.items && taskLists.items.length > 0) {
+      const tasks = Tasks.Tasks.list(taskLists.items[0].id, { showCompleted: true, showHidden: true });
+      let completedToday = (tasks.items || []).filter(t => {
+        if (!t.completed) return false;
+        const compDate = new Date(t.completed).getTime();
+        return compDate >= startMs && compDate <= endMs;
+      }).sort((a, b) => new Date(a.completed).getTime() - new Date(b.completed).getTime());
 
+      if (completedToday.length === 0) {
+        body.appendParagraph("No tasks completed.");
       } else {
-           body.appendParagraph("No Task Lists found.");
+        completedToday.forEach(task => {
+          const cUp = new Date(task.completed);
+          const cTimeStr = `${String(cUp.getHours()).padStart(2,'0')}:${String(cUp.getMinutes()).padStart(2,'0')}`;
+          const listItem = body.appendListItem(`[${cTimeStr}] `);
+          listItem.appendText(task.title).setLinkUrl(task.webViewLink || null);
+        });
       }
-
+    }
   } catch (e) {
-      if (e.message && e.message.includes("Tasks is not defined")) {
-          body.appendParagraph("Advanced Tasks Service not enabled. To fix: Script Editor > Services > Add 'Google Tasks API'.");
-      } else {
-          body.appendParagraph(`Error retrieving completed tasks: ${e.message}`);
-      }
+    body.appendParagraph(`Tasks error: ${e.message}`);
   }
 
-  // --- Tasks Created / Active Today ---
-  // API Restriction: No "created" date. showing "Active/Modified" tasks instead.
-  body.appendParagraph("Tasks Active/Modified Today (Not Completed)").setHeading(DocumentApp.ParagraphHeading.HEADING1);
-  try {
-       const taskLists = Tasks.Tasklists.list();
-      if (taskLists.items && taskLists.items.length > 0) {
-          const taskListId = taskLists.items[0].id; 
-           const optionalArgs = {
-              showCompleted: false, // Only active
-              showHidden: true
-          };
-          const tasks = Tasks.Tasks.list(taskListId, optionalArgs);
-          const activeTasks = [];
-          const startMs = startDateTime.getTime();
-          const endMs = endDateTime.getTime();
-
-          if (tasks.items) {
-               tasks.items.forEach(task => {
-                   const updatedDate = new Date(task.updated);
-                   // Ensure it was touched today
-                   if (updatedDate.getTime() >= startMs && updatedDate.getTime() <= endMs) {
-                       activeTasks.push(task);
-                   }
-               });
-          }
-          
-          if (activeTasks.length === 0) {
-              body.appendParagraph("No active tasks modified in this period.");
-          } else {
-               activeTasks.forEach(task => {
-                  const uUp = new Date(task.updated);
-                  const uTimeStr = `${String(uUp.getHours()).padStart(2,'0')}:${String(uUp.getMinutes()).padStart(2,'0')}`;
-                  const listItem = body.appendListItem(`${uTimeStr} - ${task.title}`);
-                   if (task.webViewLink) {
-                       listItem.setLinkUrl(task.webViewLink);
-                   }
-              });
-          }
-      }
-
-  } catch (e) {
-      if (e.message && e.message.includes("Tasks is not defined")) {
-          body.appendParagraph("Advanced Tasks Service not enabled.");
-      } else {
-          body.appendParagraph(`Error retrieving active tasks: ${e.message}`);
-      }
-  }
-  
-  // --- Duration ---
+  // --- Final Duration Calculation ---
   const endTime = new Date();
   const duration = (endTime.getTime() - startTime.getTime()) / 1000;
-  const durationText = 'Duration of Run: ' + duration + ' seconds';
-  // Insert duration near top (after start time)
-  // children indices: 0=Title, 1=HR, 2=Start Time, 3=Range...
-  // So insert at 3.
-  body.insertParagraph(3, durationText);
+  body.insertParagraph(3, `Duration of Run: ${duration} seconds`);
 
   doc.saveAndClose();
+}
+
+/**
+ * Simple trigger that runs when the spreadsheet is opened.
+ * Reads preferences and shows the Notes folder in cell A4 and the Date Format in cell A5.
+ */
+function onOpen() {
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    
+    // Set static preference metadata in A9 and A10
+    sheet.getRange("A9").setValue(PREFERENCE_FILE_NAME);
+    sheet.getRange("A10").setValue(PREFERENCE_SUB_FOLDER_NAME);
+
+    const preferences = loadPreferences();
+    if (preferences) {
+      sheet.getRange("A4").setValue(preferences.notesFolder || "");
+      sheet.getRange("A5").setValue(preferences.dateFormat || "");
+    } else {
+      sheet.getRange("A4").setValue("Error: Preferences file not found");
+      sheet.getRange("A5").setValue("");
+    }
+  } catch (e) {
+    try {
+      const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+      sheet.getRange("A4").setValue("Error: " + e.message);
+      sheet.getRange("A5").setValue("");
+    } catch (sheetError) {
+      Logger.log("Failed to write error to sheet: " + sheetError.toString());
+    }
+  }
 }
