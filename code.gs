@@ -1,7 +1,7 @@
 /**
  * Quick Notes Suite - Trigger Code
- * Copyright 2025 Mark A. Stout
- * Last Updated : 3-30-2026
+ * Copyright 2026 Mark A. Stout
+ * Last Updated : 6-2-2026
  * see https://sites.google.com/view/quick-notes-suite
  * * @fileoverview Google App Script functions for the QuickNoteSuite Trigger Handler.
  * This script is intended to be a separate project from the main web app.
@@ -447,17 +447,23 @@ function checkPreferencesFileExists() {
 
 function loadPreferences() {
   const fileName = PREFERENCE_FILE_NAME;
-  const parentFolderName = PREFERENCE_PARENT_FOLDER_NAME;
   const subFolderName = PREFERENCE_SUB_FOLDER_NAME;
 
   try {
     // Check if the system folder exists more than once globally
     const systemFoldersGlobal = DriveApp.getFoldersByName(subFolderName);
     let systemFolderCount = 0;
+    let systemFolder = null;
     while (systemFoldersGlobal.hasNext()) {
-      systemFoldersGlobal.next();
+      systemFolder = systemFoldersGlobal.next();
       systemFolderCount++;
     }
+
+    if (systemFolderCount === 0) {
+      Logger.log(`Preferences Error: The system folder "${subFolderName}" was not found.`);
+      return null;
+    }
+
     if (systemFolderCount > 1) {
       const errMsg = `Error: The system folder "${subFolderName}" exists more than once on your Google Drive. Please ensure it exists only once.`;
       Logger.log(errMsg);
@@ -469,25 +475,13 @@ function loadPreferences() {
       throw new Error(errMsg);
     }
 
-    const parentFolders = DriveApp.getFoldersByName(parentFolderName);
-    if (!parentFolders.hasNext()) {
-      Logger.log(`Preferences Error: The primary folder "${parentFolderName}" was not found.`);
-      return null;
-    }
-
-    const subFolders = parentFolders.next().getFoldersByName(subFolderName);
-    if (!subFolders.hasNext()) {
-      Logger.log(`Preferences Error: The sub-folder "${subFolderName}" was not found inside "${parentFolderName}".`);
-      return null;
-    }
-
-    const preferenceFiles = subFolders.next().getFilesByName(fileName);
+    const preferenceFiles = systemFolder.getFilesByName(fileName);
     if (preferenceFiles.hasNext()) {
       const file = preferenceFiles.next();
       const content = file.getBlob().getDataAsString();
       return JSON.parse(content);
     } else {
-      Logger.log(`Preferences Error: The file "${fileName}" was not found inside "${parentFolderName}/${subFolderName}".`);
+      Logger.log(`Preferences Error: The file "${fileName}" was not found inside the system folder "${subFolderName}".`);
       return null;
     }
   } catch (e) {
@@ -561,7 +555,13 @@ function listTextFilesInNotesFolder() {
 
 function triggered_makeTagIndex() {
   const startTime = new Date();
-  const folderName = "Notes";
+  
+  const preferences = loadPreferences();
+  if (!preferences || !preferences.notesFolder) {
+    Logger.log("Notes folder preference is missing. Aborting triggered_makeTagIndex.");
+    return;
+  }
+  const folderName = preferences.notesFolder;
   const folders = DriveApp.getFoldersByName(folderName);
 
   if (!folders.hasNext()) {
@@ -728,15 +728,16 @@ function createDailyReport(startDateTime, endDateTime) {
     Logger.log("Notes folder preference is missing. Aborting Daily Report.");
     return;
   }
-  const folderName = preferences.notesFolder;
-  const folders = DriveApp.getFoldersByName(folderName);
-
+  
+  const notesFolderName = preferences.notesFolder;
+  const folders = DriveApp.getFoldersByName(notesFolderName);
   if (!folders.hasNext()) {
-    Logger.log(`Folder '${folderName}' not found.`);
+    Logger.log(`Folder '${notesFolderName}' not found.`);
     return;
   }
-  
   const notesFolder = folders.next();
+  
+  // Daily Reports sub-folder
   const reportFolderName = preferences.dailyReports || "Daily Reports";
   const reportFolder = getOrCreateFolder(notesFolder, reportFolderName);
   
@@ -744,184 +745,431 @@ function createDailyReport(startDateTime, endDateTime) {
   const mm = String(startDateTime.getMonth() + 1).padStart(2, '0');
   const dd = String(startDateTime.getDate()).padStart(2, '0');
   const dateString = `${yyyy}-${mm}-${dd}`;
-  const docTitle = `Daily Report - ${dateString}`;
+  const docTitle = `Daily Chronicle - ${dateString}`;
   
+  const startStr = `${yyyy}-${mm}-${dd}T00:00:00Z`;
+  const endStr = `${yyyy}-${mm}-${dd}T23:59:59Z`;
+  
+  // We collect chronological events in this array
+  const events = [];
+  const allTasks = [];
+  
+  // Resolve Log folder
+  const logFolderName = preferences.logFolder || "Logs";
+  const logFolders = DriveApp.getFoldersByName(logFolderName);
+  let logFolderId = null;
+  if (logFolders.hasNext()) {
+    logFolderId = logFolders.next().getId();
+  }
+  
+  const systemNames = ["TasksAndLists", "TasksAndLists.json", "Calendar Events", "Calendar Events.json", "Preferences", "Preferences.json", "LogCategories", "LogCategories.json"];
+  
+  // --- STEP 3: Tasks and Lists Parsing (Do first to collect allTasks for deep scan) ---
+  const systemFolderName = PREFERENCE_SUB_FOLDER_NAME;
+  const systemFolders = DriveApp.getFoldersByName(systemFolderName);
+  if (systemFolders.hasNext()) {
+    const systemFolder = systemFolders.next();
+    
+    let taskFile = null;
+    let taskFiles = systemFolder.getFilesByName("TasksAndLists");
+    if (taskFiles.hasNext()) {
+      taskFile = taskFiles.next();
+    } else {
+      taskFiles = systemFolder.getFilesByName("TasksAndLists.json");
+      if (taskFiles.hasNext()) {
+        taskFile = taskFiles.next();
+      }
+    }
+    
+    if (taskFile) {
+      try {
+        const content = taskFile.getBlob().getDataAsString();
+        const taskData = JSON.parse(content);
+        const categories = taskData.categories || [];
+        categories.forEach(cat => {
+          const items = cat.items || [];
+          items.forEach(item => {
+            allTasks.push(item);
+            
+            if (item.date_created) {
+              const d = new Date(item.date_created);
+              if (d >= startDateTime && d <= endDateTime) {
+                events.push({
+                  timestamp: d,
+                  text: `Task Created: ${item.text}`
+                });
+              }
+            }
+            if (item.date_completed) {
+              const d = new Date(item.date_completed);
+              if (d >= startDateTime && d <= endDateTime) {
+                events.push({
+                  timestamp: d,
+                  text: `Task Completed: ${item.text}`
+                });
+              }
+            }
+            if (item.date_pending) {
+              const d = new Date(item.date_pending);
+              if (d >= startDateTime && d <= endDateTime) {
+                events.push({
+                  timestamp: d,
+                  text: `Task Moved to Pending: ${item.text}`
+                });
+              }
+            }
+          });
+        });
+      } catch (e) {
+        Logger.log(`Error parsing TasksAndLists: ${e.toString()}`);
+      }
+    }
+    
+    // --- STEP 4: Calendar Parsing ---
+    let calFile = null;
+    let calFiles = systemFolder.getFilesByName("Calendar Events");
+    if (calFiles.hasNext()) {
+      calFile = calFiles.next();
+    } else {
+      calFiles = systemFolder.getFilesByName("Calendar Events.json");
+      if (calFiles.hasNext()) {
+        calFile = calFiles.next();
+      }
+    }
+    
+    if (calFile) {
+      try {
+        const content = calFile.getBlob().getDataAsString();
+        const calData = JSON.parse(content);
+        const eventsArray = Array.isArray(calData) ? calData : (calData.events || []);
+        eventsArray.forEach(evt => {
+          const title = evt.summary || evt.title || evt.text || evt.name || evt.subject || "Unnamed Event";
+          
+          if (evt.created_at || evt.created) {
+            const d = new Date(evt.created_at || evt.created);
+            if (d >= startDateTime && d <= endDateTime) {
+              events.push({
+                timestamp: d,
+                text: `Calendar Event Created: ${title}`
+              });
+            }
+          }
+          if (evt.completed_at || evt.completed) {
+            const d = new Date(evt.completed_at || evt.completed);
+            if (d >= startDateTime && d <= endDateTime) {
+              events.push({
+                timestamp: d,
+                text: `Calendar Event Completed: ${title}`
+              });
+            }
+          }
+          if (evt.cancelled_at || evt.cancelled) {
+            const d = new Date(evt.cancelled_at || evt.cancelled);
+            if (d >= startDateTime && d <= endDateTime) {
+              events.push({
+                timestamp: d,
+                text: `Calendar Event Cancelled: ${title}`
+              });
+            }
+          }
+        });
+      } catch (e) {
+        Logger.log(`Error parsing Calendar Events system file: ${e.toString()}`);
+      }
+    }
+  }
+  
+  // --- STEP 1: Document & Spreadsheet Creations ---
+  const creationsQuery = `modifiedDate >= '${yyyy}-${mm}-${dd}T00:00:00' and trashed = false`;
+  const creationsIter = DriveApp.searchFiles(creationsQuery);
+  while (creationsIter.hasNext()) {
+    const file = creationsIter.next();
+    const createdDate = file.getDateCreated();
+    if (createdDate < startDateTime || createdDate > endDateTime) continue;
+    
+    const fileName = file.getName();
+    
+    // Exclusions
+    if (systemNames.indexOf(fileName) !== -1 || fileName === PREFERENCE_FILE_NAME) continue;
+    
+    // Exclude if in log folder
+    const parents = file.getParents();
+    let inLogFolder = false;
+    while (parents.hasNext()) {
+      if (parents.next().getId() === logFolderId) {
+        inLogFolder = true;
+        break;
+      }
+    }
+    if (inLogFolder) continue;
+    
+    let typeLabel = "File";
+    const mime = file.getMimeType();
+    if (mime === 'application/vnd.google-apps.document') {
+      typeLabel = "Document";
+    } else if (mime === 'application/vnd.google-apps.spreadsheet') {
+      typeLabel = "Spreadsheet";
+    }
+    
+    events.push({
+      timestamp: file.getDateCreated(),
+      text: `${typeLabel} Created: ${fileName}`,
+      url: file.getUrl()
+    });
+  }
+  
+  // --- STEP 2: Spreadsheet Updates (Logging) ---
+  if (logFolderId) {
+    const logFolder = DriveApp.getFolderById(logFolderId);
+    const sheetsIter = logFolder.getFilesByType('application/vnd.google-apps.spreadsheet');
+    while (sheetsIter.hasNext()) {
+      const sheetFile = sheetsIter.next();
+      const updated = sheetFile.getLastUpdated();
+      if (updated >= startDateTime && updated <= endDateTime) {
+        const category = sheetFile.getName();
+        try {
+          const spreadsheet = SpreadsheetApp.openById(sheetFile.getId());
+          const sheets = spreadsheet.getSheets();
+          sheets.forEach(sh => {
+            const range = sh.getDataRange();
+            const values = range.getValues();
+            values.forEach(row => {
+              const parsed = parseDateTimeAndText(row);
+              if (parsed) {
+                const ts = parsed.timestamp;
+                if (ts >= startDateTime && ts <= endDateTime) {
+                  events.push({
+                    timestamp: ts,
+                    text: `Log:${category} - ${parsed.text}`
+                  });
+                }
+              }
+            });
+          });
+        } catch (e) {
+          Logger.log(`Error parsing spreadsheet log ${category}: ${e.toString()}`);
+        }
+      }
+    }
+  }
+  
+  // --- STEP 5: Advanced Document Parsing (Deep Scan) ---
+  const modifiedQuery = `mimeType = 'application/vnd.google-apps.document' and modifiedDate >= '${startStr}' and modifiedDate <= '${endStr}' and trashed = false`;
+  const modifiedIter = DriveApp.searchFiles(modifiedQuery);
+  while (modifiedIter.hasNext()) {
+    const docFile = modifiedIter.next();
+    const docName = docFile.getName();
+    
+    // Check if created today (already handled in Step 1)
+    const createdDate = docFile.getDateCreated();
+    if (createdDate >= startDateTime && createdDate <= endDateTime) {
+      continue;
+    }
+    
+    // Skip system files
+    if (systemNames.indexOf(docName) !== -1 || docName === PREFERENCE_FILE_NAME) {
+      continue;
+    }
+    
+    // Skip if in log folder
+    const parents = docFile.getParents();
+    let inLogFolder = false;
+    while (parents.hasNext()) {
+      if (parents.next().getId() === logFolderId) {
+        inLogFolder = true;
+        break;
+      }
+    }
+    if (inLogFolder) continue;
+    
+    try {
+      const doc = DocumentApp.openById(docFile.getId());
+      const docText = doc.getBody().getText();
+      
+      // 1. Location Notes
+      if (docName.startsWith("Location-")) {
+        const lines = docText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+        const addressInfo = lines.join(", ");
+        events.push({
+          timestamp: docFile.getLastUpdated(),
+          text: `Location Update (${docName}): ${addressInfo}`,
+          url: docFile.getUrl()
+        });
+      }
+      
+      // 2. Linked Notes
+      allTasks.forEach(task => {
+        if (task.text && (docText.includes(task.id) || docText.includes(task.text))) {
+          events.push({
+            timestamp: docFile.getLastUpdated(),
+            text: `Linked Note: Document "${docName}" is associated with Task "${task.text}"`,
+            url: docFile.getUrl()
+          });
+        }
+      });
+      
+      // 3. Timestamped Entries
+      const dateRegex = /Date:\s*(\d{4})[-/](\d{2})[-/](\d{2})\s+(\d{2}):(\d{2})([^\n]*)/g;
+      let match;
+      while ((match = dateRegex.exec(docText)) !== null) {
+        const year = parseInt(match[1], 10);
+        const month = parseInt(match[2], 10) - 1;
+        const day = parseInt(match[3], 10);
+        const hour = parseInt(match[4], 10);
+        const minute = parseInt(match[5], 10);
+        const entryTime = new Date(year, month, day, hour, minute);
+        
+        if (entryTime >= startDateTime && entryTime <= endDateTime) {
+          const entryText = match[6].trim() || "Notes Entry";
+          events.push({
+            timestamp: entryTime,
+            text: `Doc Entry (${docName}): ${entryText}`,
+            url: docFile.getUrl()
+          });
+        }
+      }
+    } catch (e) {
+      Logger.log(`Error deep scanning doc ${docName}: ${e.toString()}`);
+    }
+  }
+  
+  // Sort all events chronologically (24-hour normalized)
+  events.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  
+  // --- Create Google Doc Report ---
   const doc = DocumentApp.create(docTitle);
   const file = DriveApp.getFileById(doc.getId());
   
   reportFolder.addFile(file);
   DriveApp.getRootFolder().removeFile(file);
-
+  
   const body = doc.getBody();
   
-  // --- Header/Title Setup ---
+  // Style page background (light theme: #FFFFFF)
+  body.setBackgroundColor("#FFFFFF");
+  
+  // Title Setup
   const titleParagraph = body.getParagraphs()[0];
-  titleParagraph.setText(`Daily Report: ${dateString}`);
+  titleParagraph.setText(`Daily Chronicle: ${dateString}`);
   titleParagraph.setHeading(DocumentApp.ParagraphHeading.TITLE);
-  body.appendHorizontalRule();
-
-  // --- Footer Setup ---
-  let footer = doc.getFooter() || doc.addFooter();
-  const originalFooterChildren = footer.getNumChildren();
-  footer.appendParagraph("");
-  for (let i = 0; i < originalFooterChildren; i++) {
-    footer.getChild(0).removeFromParent();
-  }
-  const footerTextPara = footer.getParagraphs()[0];
-  footerTextPara.setText('Generated by Quick Note Suite');
-  footerTextPara.setLinkUrl("https://sites.google.com/view/quick-notes-suite/home");
-  footerTextPara.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
-  footer.insertHorizontalRule(0);
-
-  // --- Stats Section ---
-  const reportTimeStr = `${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`; 
-  body.appendParagraph('Report Generated at : ' + reportTimeStr);
-  const startHmm = `${String(startDateTime.getHours()).padStart(2,'0')}:${String(startDateTime.getMinutes()).padStart(2,'0')}`;
-  const endHmm = `${String(endDateTime.getHours()).padStart(2,'0')}:${String(endDateTime.getMinutes()).padStart(2,'0')}`;
-  body.appendParagraph(`Reporting Period: ${startHmm} - ${endHmm}`);
-
-  // --- Drive File Logic ---
-  const broadQuery = `modifiedDate > '${yyyy}-${mm}-${dd}' and trashed = false`;
-  const filesIterator = DriveApp.searchFiles(broadQuery);
   
-  const createdFilesList = [];
-  const modifiedFilesList = [];
-  const startMs = startDateTime.getTime();
-  const endMs = endDateTime.getTime();
+  const titleText = titleParagraph.editAsText();
+  titleText.setForegroundColor("#000000");
+  titleText.setFontSize(24);
+  titleText.setBold(true);
   
-  while (filesIterator.hasNext()) {
-    const f = filesIterator.next();
-    const fCreated = f.getDateCreated();
-    const fUpdated = f.getLastUpdated();
-    
-    if (fCreated.getTime() >= startMs && fCreated.getTime() <= endMs) {
-      createdFilesList.push(f);
-    }
-    if (fUpdated.getTime() >= startMs && fUpdated.getTime() <= endMs && fCreated.getTime() < startMs) {
-      modifiedFilesList.push(f);
-    }
-  }
-
-  // Chronological Sort
-  createdFilesList.sort((a, b) => a.getDateCreated().getTime() - b.getDateCreated().getTime());
-  modifiedFilesList.sort((a, b) => a.getLastUpdated().getTime() - b.getLastUpdated().getTime());
-
-  // 1. Files Created
-  body.appendParagraph("Files Created").setHeading(DocumentApp.ParagraphHeading.HEADING1);
-  if (createdFilesList.length === 0) {
-    body.appendParagraph("No files created in this period.");
-  } else {
-    createdFilesList.forEach(f => {
-      const fTime = f.getDateCreated();
-      const timeStr = `${String(fTime.getHours()).padStart(2,'0')}:${String(fTime.getMinutes()).padStart(2,'0')}`;
-      const listItem = body.appendListItem(`[${timeStr}] `);
-      listItem.appendText(f.getName()).setLinkUrl(f.getUrl());
-    });
-  }
-
-  // 2. Files Modified
-  body.appendParagraph("Files Modified").setHeading(DocumentApp.ParagraphHeading.HEADING1);
-  if (modifiedFilesList.length === 0) {
-    body.appendParagraph("No files modified in this period.");
-  } else {
-    modifiedFilesList.forEach(f => {
-      const fTime = f.getLastUpdated();
-      const timeStr = `${String(fTime.getHours()).padStart(2,'0')}:${String(fTime.getMinutes()).padStart(2,'0')}`;
-      const listItem = body.appendListItem(`[${timeStr}] `);
-      listItem.appendText(f.getName()).setLinkUrl(f.getUrl());
-    });
-  }
-
-  // --- Calendar Events Today ---
-  body.appendParagraph("Calendar Events for Today").setHeading(DocumentApp.ParagraphHeading.HEADING1);
-  try {
-    const response = Calendar.Events.list('primary', {
-      timeMin: startDateTime.toISOString(),
-      timeMax: endDateTime.toISOString(),
-      showDeleted: false,
-      singleEvents: true,
-      orderBy: 'startTime'
-    });
-    
-    if (response.items && response.items.length > 0) {
-      response.items.forEach(event => {
-        let eTimeStr = "All Day";
-        if (event.start.dateTime) {
-          const eStart = new Date(event.start.dateTime);
-          eTimeStr = `${String(eStart.getHours()).padStart(2,'0')}:${String(eStart.getMinutes()).padStart(2,'0')}`;
-        }
-        const listItem = body.appendListItem(`[${eTimeStr}] `);
-        listItem.appendText(event.summary).setLinkUrl(event.htmlLink || null);
-      });
-    } else {
-      body.appendParagraph("No events scheduled.");
-    }
-  } catch (e) {
-    body.appendParagraph(`Calendar access error: ${e.message}`);
-  }
-
-  // --- Calendar Events Created Today ---
-  body.appendParagraph("Calendar Events Created Today").setHeading(DocumentApp.ParagraphHeading.HEADING1);
-  try {
-    const response = Calendar.Events.list('primary', {
-      timeMin: startDateTime.toISOString(),
-      updatedMin: startDateTime.toISOString(),
-      showDeleted: false,
-      singleEvents: false 
-    });
-    
-    let createdEvents = (response.items || []).filter(item => {
-      const cDate = new Date(item.created).getTime();
-      return cDate >= startMs && cDate <= endMs;
-    }).sort((a, b) => new Date(a.created).getTime() - new Date(b.created).getTime());
-
-    if (createdEvents.length === 0) {
-      body.appendParagraph("No events created.");
-    } else {
-      createdEvents.forEach(item => {
-        const cDate = new Date(item.created);
-        const cTimeStr = `${String(cDate.getHours()).padStart(2,'0')}:${String(cDate.getMinutes()).padStart(2,'0')}`;
-        const listItem = body.appendListItem(`[${cTimeStr}] `);
-        listItem.appendText(item.summary).setLinkUrl(item.htmlLink || null);
-      });
-    }
-  } catch (e) {
-    body.appendParagraph(`Created events error: ${e.message}`);
-  }
-
-  // --- Tasks Completed Today ---
-  body.appendParagraph("Tasks Completed Today").setHeading(DocumentApp.ParagraphHeading.HEADING1);
-  try {
-    const taskLists = Tasks.Tasklists.list();
-    if (taskLists.items && taskLists.items.length > 0) {
-      const tasks = Tasks.Tasks.list(taskLists.items[0].id, { showCompleted: true, showHidden: true });
-      let completedToday = (tasks.items || []).filter(t => {
-        if (!t.completed) return false;
-        const compDate = new Date(t.completed).getTime();
-        return compDate >= startMs && compDate <= endMs;
-      }).sort((a, b) => new Date(a.completed).getTime() - new Date(b.completed).getTime());
-
-      if (completedToday.length === 0) {
-        body.appendParagraph("No tasks completed.");
-      } else {
-        completedToday.forEach(task => {
-          const cUp = new Date(task.completed);
-          const cTimeStr = `${String(cUp.getHours()).padStart(2,'0')}:${String(cUp.getMinutes()).padStart(2,'0')}`;
-          const listItem = body.appendListItem(`[${cTimeStr}] `);
-          listItem.appendText(task.title).setLinkUrl(task.webViewLink || null);
-        });
-      }
-    }
-  } catch (e) {
-    body.appendParagraph(`Tasks error: ${e.message}`);
-  }
-
-  // --- Final Duration Calculation ---
+  // Horizontal Rule (styled as standard divider)
+  const hr = body.appendHorizontalRule();
+  
+  // Time and duration stats
   const endTime = new Date();
   const duration = (endTime.getTime() - startTime.getTime()) / 1000;
-  body.insertParagraph(3, `Duration of Run: ${duration} seconds`);
-
+  
+  const statsPara = body.appendParagraph(`Report Generated: ${new Date().toLocaleString()} | Run Duration: ${duration}s`);
+  const statsText = statsPara.editAsText();
+  statsText.setForegroundColor("#666666");
+  statsText.setFontSize(10);
+  statsText.setItalic(true);
+  
+  body.appendParagraph(""); // Space
+  
+  // Append all events
+  if (events.length === 0) {
+    const emptyPara = body.appendParagraph("No activity recorded today.");
+    const emptyText = emptyPara.editAsText();
+    emptyText.setForegroundColor("#000000");
+    emptyText.setFontSize(11);
+  } else {
+    events.forEach(evt => {
+      const timeStr = Utilities.formatDate(evt.timestamp, Session.getScriptTimeZone(), "HH:mm");
+      const p = body.appendParagraph("");
+      
+      // [HH:mm] in legible Green (#2E7D32)
+      const timeRun = p.appendText(`[${timeStr}] `);
+      timeRun.setForegroundColor("#2E7D32");
+      timeRun.setBold(true);
+      timeRun.setFontSize(11);
+      
+      // Description in Black (#000000)
+      const textRun = p.appendText(evt.text);
+      textRun.setForegroundColor("#000000");
+      textRun.setFontSize(11);
+      
+      // Link in legible Blue (#1976D2)
+      if (evt.url) {
+        const linkRun = p.appendText(" ");
+        const linkText = p.appendText("(Link)");
+        linkText.setLinkUrl(evt.url);
+        linkText.setForegroundColor("#1976D2");
+        linkText.setUnderline(true);
+        linkText.setFontSize(11);
+      }
+    });
+  }
+  
+  // Footer
+  body.appendParagraph("").appendHorizontalRule();
+  const footerPara = body.appendParagraph("Generated by Quick Note Suite");
+  footerPara.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  const footerText = footerPara.editAsText();
+  footerText.setLinkUrl("https://sites.google.com/view/quick-notes-suite/home");
+  footerText.setForegroundColor("#888888");
+  footerText.setFontSize(10);
+  footerText.setBold(true);
+  
   doc.saveAndClose();
+}
+
+/**
+ * Robust datetime parser that parses rows of log spreadsheets.
+ * Supports MM-dd-yyyy HH:mm:ss and variations with / or .
+ */
+function parseDateTimeAndText(row) {
+  if (!row || row.length === 0) return null;
+  let timestamp = null;
+  
+  for (let i = 0; i < row.length; i++) {
+    let val = row[i];
+    if (val instanceof Date) {
+      if (!isNaN(val.getTime())) {
+        timestamp = val;
+        break;
+      }
+    } else if (typeof val === 'string' && val.trim() !== '') {
+      const match = val.trim().match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})$/);
+      if (match) {
+        const month = parseInt(match[1], 10) - 1;
+        const day = parseInt(match[2], 10);
+        const year = parseInt(match[3], 10);
+        const hour = parseInt(match[4], 10);
+        const minute = parseInt(match[5], 10);
+        const second = parseInt(match[6], 10);
+        const d = new Date(year, month, day, hour, minute, second);
+        if (!isNaN(d.getTime())) {
+          timestamp = d;
+          break;
+        }
+      }
+    }
+  }
+
+  if (timestamp) {
+    let bodyParts = [];
+    for (let i = 0; i < row.length; i++) {
+      let val = row[i];
+      if (val instanceof Date) continue;
+      if (typeof val === 'string' && val.trim() !== '') {
+        const match = val.trim().match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})$/);
+        if (match) continue;
+        bodyParts.push(val);
+      } else if (val !== null && val !== undefined && val !== '') {
+        bodyParts.push(val.toString());
+      }
+    }
+    const text = bodyParts.join(" - ");
+    return { timestamp: timestamp, text: text };
+  }
+  return null;
 }
 
 /**
