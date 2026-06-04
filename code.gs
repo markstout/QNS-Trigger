@@ -34,8 +34,10 @@ function setupTriggers() {
     return;
   }
 
-  deleteAllTriggers();
-  ui.alert("Existing triggers have been removed.\nPlease wait while I create the new triggers.");
+  const removedCount = deleteAllTriggers();
+  ui.alert(`${removedCount} existing trigger(s) have been deleted. Press OK to regenerate the triggers with updated versions.`);
+
+  let createdCount = 0;
 
   const triggerFunctions = [
     'triggered_processEmailsToDoc',
@@ -51,6 +53,7 @@ function setupTriggers() {
         .withFailureNotificationFrequency(ScriptApp.FailureNotificationFrequency.HOURLY)
         .create();
       Logger.log(`Successfully created 5-minute trigger for ${functionName} with hourly error notifications.`);
+      createdCount++;
     } catch (e) {
       Logger.log(`Warning: Could not set failure notification frequency for ${functionName}. Error: ${e.message}. Creating trigger without notification setting.`);
       ScriptApp.newTrigger(functionName)
@@ -58,6 +61,7 @@ function setupTriggers() {
         .everyMinutes(5)
         .create();
       Logger.log(`Successfully created 5-minute trigger for ${functionName} (without error notifications).`);
+      createdCount++;
     }
   });
 
@@ -70,6 +74,7 @@ function setupTriggers() {
       .withFailureNotificationFrequency(ScriptApp.FailureNotificationFrequency.HOURLY)
       .create();
     Logger.log(`Successfully created daily 3 AM to 4 AM trigger for triggered_makeTagIndex with hourly error notifications.`);
+    createdCount++;
   } catch (e) {
     Logger.log(`Warning: Could not set failure notification frequency for triggered_makeTagIndex. Error: ${e.message}. Creating trigger without notification setting.`);
     ScriptApp.newTrigger('triggered_makeTagIndex')
@@ -79,6 +84,7 @@ function setupTriggers() {
       .nearMinute(0)
       .create();
     Logger.log(`Successfully created daily 3 AM to 4 AM trigger for triggered_makeTagIndex (without error notifications).`);
+    createdCount++;
   }
 
   try {
@@ -90,6 +96,7 @@ function setupTriggers() {
       .withFailureNotificationFrequency(ScriptApp.FailureNotificationFrequency.HOURLY)
       .create();
     Logger.log(`Successfully created daily 3 AM to 4 AM trigger for triggered_dailyReport with hourly error notifications.`);
+    createdCount++;
   } catch (e) {
     Logger.log(`Warning: Could not set failure notification frequency for triggered_dailyReport. Error: ${e.message}. Creating trigger without notification setting.`);
     ScriptApp.newTrigger('triggered_dailyReport')
@@ -99,6 +106,29 @@ function setupTriggers() {
       .nearMinute(0)
       .create();
     Logger.log(`Successfully created daily 3 AM to 4 AM trigger for triggered_dailyReport (without error notifications).`);
+    createdCount++;
+  }
+
+  try {
+    ScriptApp.newTrigger('triggered_backupSetupFiles')
+      .timeBased()
+      .everyDays(1)
+      .atHour(3)
+      .nearMinute(0)
+      .withFailureNotificationFrequency(ScriptApp.FailureNotificationFrequency.HOURLY)
+      .create();
+    Logger.log(`Successfully created daily 3 AM to 4 AM trigger for triggered_backupSetupFiles with hourly error notifications.`);
+    createdCount++;
+  } catch (e) {
+    Logger.log(`Warning: Could not set failure notification frequency for triggered_backupSetupFiles. Error: ${e.message}. Creating trigger without notification setting.`);
+    ScriptApp.newTrigger('triggered_backupSetupFiles')
+      .timeBased()
+      .everyDays(1)
+      .atHour(3)
+      .nearMinute(0)
+      .create();
+    Logger.log(`Successfully created daily 3 AM to 4 AM trigger for triggered_backupSetupFiles (without error notifications).`);
+    createdCount++;
   }
   
   // After setting triggers, rename and move this script file for organization.
@@ -139,7 +169,7 @@ function setupTriggers() {
       ui.alert(`Warning: Triggers were created, but the script file could not be automatically organized. Error: ${e.message}`);
   }
 
-  ui.alert('All triggers have been set up successfully. They will now run automatically every 5 minutes.\n\nYou may now close this spreadsheet.');
+  ui.alert(`All ${createdCount} triggers have been set up and completed successfully.\n\nYou may now close this spreadsheet.`);
 }
 
 
@@ -384,10 +414,12 @@ function triggered_MoveKeepNotes() {
 
 function deleteAllTriggers() {
   const allTriggers = ScriptApp.getProjectTriggers();
+  const count = allTriggers.length;
   for (let i = 0; i < allTriggers.length; i++) {
     ScriptApp.deleteTrigger(allTriggers[i]);
   }
-  Logger.log(allTriggers.length + ' triggers deleted.');
+  Logger.log(count + ' triggers deleted.');
+  return count;
 }
 
 function addStandardDocHeader(doc, date, title, url, source) {
@@ -738,6 +770,76 @@ function triggered_dailyReport() {
   
   Logger.log("Creating/updating Tag Index...");
   triggered_makeTagIndex();
+}
+
+/**
+ * Trigger wrapper for backing up setup files.
+ * Zips all files in "System Files - DO NOT DELETE OR EDIT"
+ * and saves to "Capit System Backups" folder in root Drive.
+ */
+function triggered_backupSetupFiles() {
+  if (!checkPreferencesFileExists()) {
+    Logger.log("Preferences file not found. Skipping backup.");
+    return;
+  }
+  
+  Logger.log("Starting triggered_backupSetupFiles...");
+  
+  try {
+    const subFolderName = PREFERENCE_SUB_FOLDER_NAME;
+    const systemFolders = DriveApp.getFoldersByName(subFolderName);
+    let systemFolderCount = 0;
+    let systemFolder = null;
+    while (systemFolders.hasNext()) {
+      systemFolder = systemFolders.next();
+      systemFolderCount++;
+    }
+    
+    if (systemFolderCount === 0) {
+      Logger.log(`Backup Error: The system folder "${subFolderName}" was not found.`);
+      return;
+    }
+    if (systemFolderCount > 1) {
+      Logger.log(`Backup Error: The system folder "${subFolderName}" exists more than once. Aborting backup.`);
+      return;
+    }
+    
+    const files = systemFolder.getFiles();
+    const blobs = [];
+    while (files.hasNext()) {
+      const file = files.next();
+      // Ensure the blob has the correct filename inside the zip
+      const blob = file.getBlob().setName(file.getName());
+      blobs.push(blob);
+    }
+    
+    if (blobs.length === 0) {
+      Logger.log("No files found in the system folder to backup.");
+      return;
+    }
+    
+    const now = new Date();
+    const formattedDate = Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+    const zipFileName = "Capit System Backup-" + formattedDate + ".zip";
+    
+    // Get or create "Capit System Backups" in the root of Google Drive
+    const rootFolder = DriveApp.getRootFolder();
+    const backupFolders = rootFolder.getFoldersByName("Capit System Backups");
+    let backupFolder;
+    if (backupFolders.hasNext()) {
+      backupFolder = backupFolders.next();
+    } else {
+      backupFolder = rootFolder.createFolder("Capit System Backups");
+      Logger.log("Created folder 'Capit System Backups' in root.");
+    }
+    
+    const zipBlob = Utilities.zip(blobs, zipFileName);
+    const createdFile = backupFolder.createFile(zipBlob);
+    
+    Logger.log(`Successfully backed up system files to "${createdFile.getName()}" in folder "Capit System Backups"`);
+  } catch (e) {
+    Logger.log(`An error occurred during triggered_backupSetupFiles: ${e.toString()}`);
+  }
 }
 
 /**
