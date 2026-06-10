@@ -18,6 +18,8 @@
 const PREFERENCE_FILE_NAME = 'QuickNoteSuitePreferences-Do-not-Delete-or-Edit';
 const PREFERENCE_PARENT_FOLDER_NAME = 'Notes2';
 const PREFERENCE_SUB_FOLDER_NAME = 'System Files - DO NOT DELETE OR EDIT';
+const PREFERENCE_SPREADSHEET_NAME = 'CapIt-Configuration';
+const PREFERENCE_SHEET_TAB_NAME = 'Config';
 
 // --- MASTER SETUP FUNCTION ---
 
@@ -478,49 +480,86 @@ function checkPreferencesFileExists() {
 }
 
 function loadPreferences() {
-  const fileName = PREFERENCE_FILE_NAME;
-  const subFolderName = PREFERENCE_SUB_FOLDER_NAME;
-
   try {
-    // Check if the system folder exists more than once globally
-    const systemFoldersGlobal = DriveApp.getFoldersByName(subFolderName);
-    let systemFolderCount = 0;
-    let systemFolder = null;
-    while (systemFoldersGlobal.hasNext()) {
-      systemFolder = systemFoldersGlobal.next();
-      systemFolderCount++;
-    }
+    let ss = null;
 
-    if (systemFolderCount === 0) {
-      Logger.log(`Preferences Error: The system folder "${subFolderName}" was not found.`);
-      return null;
-    }
-
-    if (systemFolderCount > 1) {
-      const errMsg = `Error: The system folder "${subFolderName}" exists more than once on your Google Drive. Please ensure it exists only once.`;
-      Logger.log(errMsg);
-      try {
-        SpreadsheetApp.getUi().alert(errMsg);
-      } catch (uiError) {
-        // UI not available (e.g. background trigger execution)
+    // 1. Try checking the active spreadsheet first, in case the script is container-bound to CapIt-Configuration or the trigger sheet
+    try {
+      const activeSS = SpreadsheetApp.getActiveSpreadsheet();
+      if (activeSS) {
+        if (activeSS.getName() === PREFERENCE_SPREADSHEET_NAME || activeSS.getSheetByName(PREFERENCE_SHEET_TAB_NAME)) {
+          ss = activeSS;
+        }
       }
-      throw new Error(errMsg);
+    } catch (e) {
+      Logger.log("Could not access active spreadsheet or not container-bound: " + e.toString());
     }
 
-    const preferenceFiles = systemFolder.getFilesByName(fileName);
-    if (preferenceFiles.hasNext()) {
-      const file = preferenceFiles.next();
-      const content = file.getBlob().getDataAsString();
-      return JSON.parse(content);
-    } else {
-      Logger.log(`Preferences Error: The file "${fileName}" was not found inside the system folder "${subFolderName}".`);
+    // 2. If not found or didn't have the Config tab, search Google Drive for the CapIt-Configuration spreadsheet
+    if (!ss) {
+      const files = DriveApp.getFilesByName(PREFERENCE_SPREADSHEET_NAME);
+      while (files.hasNext()) {
+        const file = files.next();
+        if (file.getMimeType() === MimeType.GOOGLE_SHEETS) {
+          try {
+            const tempSS = SpreadsheetApp.open(file);
+            if (tempSS.getSheetByName(PREFERENCE_SHEET_TAB_NAME)) {
+              ss = tempSS;
+              break;
+            }
+          } catch (openError) {
+            Logger.log(`Failed to open file "${file.getName()}" as Spreadsheet: ${openError.toString()}`);
+          }
+        }
+      }
+    }
+
+    if (!ss) {
+      Logger.log(`Preferences Error: Spreadsheet "${PREFERENCE_SPREADSHEET_NAME}" with tab "${PREFERENCE_SHEET_TAB_NAME}" was not found.`);
       return null;
     }
-  } catch (e) {
-    Logger.log(`A critical error occurred while loading preferences: ${e.toString()}`);
-    if (e.message && e.message.includes("exists more than once")) {
-      throw e;
+
+    const configSheet = ss.getSheetByName(PREFERENCE_SHEET_TAB_NAME);
+    if (!configSheet) {
+      Logger.log(`Preferences Error: Tab "${PREFERENCE_SHEET_TAB_NAME}" was not found in "${PREFERENCE_SPREADSHEET_NAME}" spreadsheet.`);
+      return null;
     }
+
+    const range = configSheet.getDataRange();
+    const values = range.getValues();
+    const preferences = {};
+
+    for (let i = 0; i < values.length; i++) {
+      const key = values[i][0];
+      const val = values[i][1];
+      if (key !== null && key !== undefined) {
+        const trimmedKey = String(key).trim();
+        // Skip potential headers or empty keys
+        if (trimmedKey && trimmedKey.toLowerCase() !== "parameter" && trimmedKey.toLowerCase() !== "key" && trimmedKey.toLowerCase() !== "property") {
+          let processedVal = val;
+          if (typeof val === 'string') {
+            const trimmedVal = val.trim();
+            if (trimmedVal.toLowerCase() === "true") {
+              processedVal = true;
+            } else if (trimmedVal.toLowerCase() === "false") {
+              processedVal = false;
+            } else {
+              processedVal = trimmedVal;
+            }
+          }
+          preferences[trimmedKey] = processedVal;
+        }
+      }
+    }
+
+    if (Object.keys(preferences).length === 0) {
+      Logger.log(`Preferences Error: No configuration entries found in tab "${PREFERENCE_SHEET_TAB_NAME}".`);
+      return null;
+    }
+
+    return preferences;
+  } catch (e) {
+    Logger.log(`A critical error occurred while loading preferences from sheet: ${e.toString()}`);
     return null;
   }
 }
@@ -607,7 +646,7 @@ function getFilesRecursive(folder, taggedFiles, excludeFolderNames, marker) {
       if (tags) {
         Logger.log(`Found tagged file: "${title}" in folder "${folderName}" with tags: ${tags.join(', ')}`);
         tags.forEach(tag => {
-          const tagName = tag.substring(marker.length);
+          const tagName = tag.substring(marker.length).toUpperCase();
           if (!taggedFiles[tagName]) {
             taggedFiles[tagName] = [];
           }
@@ -1026,7 +1065,7 @@ function createDailyReport(startDateTime, endDateTime) {
     const fileName = file.getName();
     
     // Exclusions
-    if (systemNames.indexOf(fileName) !== -1 || fileName === PREFERENCE_FILE_NAME) continue;
+    if (systemNames.indexOf(fileName) !== -1 || fileName === PREFERENCE_FILE_NAME || fileName === PREFERENCE_SPREADSHEET_NAME) continue;
     
     // Exclude if in log folder
     const parents = file.getParents();
@@ -1103,7 +1142,7 @@ function createDailyReport(startDateTime, endDateTime) {
     }
     
     // Skip system files
-    if (systemNames.indexOf(docName) !== -1 || docName === PREFERENCE_FILE_NAME) {
+    if (systemNames.indexOf(docName) !== -1 || docName === PREFERENCE_FILE_NAME || docName === PREFERENCE_SPREADSHEET_NAME) {
       continue;
     }
     
@@ -1317,8 +1356,8 @@ function onOpen() {
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
     
     // Set static preference metadata in A9 and A10
-    sheet.getRange("A9").setValue(PREFERENCE_FILE_NAME);
-    sheet.getRange("A10").setValue(PREFERENCE_SUB_FOLDER_NAME);
+    sheet.getRange("A9").setValue(PREFERENCE_SPREADSHEET_NAME);
+    sheet.getRange("A10").setValue(PREFERENCE_SHEET_TAB_NAME);
 
     const preferences = loadPreferences();
     if (preferences) {
