@@ -196,15 +196,22 @@ function triggered_processEmailsToDoc() {
   const noteDocFolder = preferences.notesFolder;
   const notesEmailArchiveFolder = preferences.notesEmailArchiveFolder;
   
+  if (!notesEmailAddress || !yourGmailAddress || !rawNotesEmailLabel || !noteDocFolder || !notesEmailArchiveFolder) {
+    const missing = [];
+    if (!notesEmailAddress) missing.push("notesEmail");
+    if (!yourGmailAddress) missing.push("yourGmailAddress");
+    if (!rawNotesEmailLabel) missing.push("gmailPendingFolder");
+    if (!noteDocFolder) missing.push("notesFolder");
+    if (!notesEmailArchiveFolder) missing.push("notesEmailArchiveFolder");
+    Logger.log(`Missing one or more required preferences: ${missing.join(", ")}. Aborting.`);
+    Logger.log(`Available preference keys loaded: [${Object.keys(preferences).join(", ")}]`);
+    return;
+  }
+  
   // Default to "Attachments" if preference is missing, and ensure folder creation.
   const attachmentFolderName = preferences.attachmentFolder || "Attachments"; 
   const targetDocFolder = getOrCreateFolder(DriveApp, noteDocFolder);
   const targetAttachmentFolder = getOrCreateFolder(targetDocFolder, attachmentFolderName);
-  
-  if (!notesEmailAddress || !yourGmailAddress || !rawNotesEmailLabel || !noteDocFolder || !notesEmailArchiveFolder) {
-    Logger.log("Missing one or more required preferences. Aborting.");
-    return;
-  }
   
   const notesEmailLabelForSearch = rawNotesEmailLabel.replace(/ /g, '-');
   const pendingLabel = getOrCreateLabel(rawNotesEmailLabel);
@@ -307,7 +314,10 @@ function triggered_convertTextNotesToDoc() {
   
   const preferences = loadPreferences();
   if (!preferences || !preferences.notesFolder) {
-    Logger.log("Notes folder preference is missing. Aborting.");
+    Logger.log("Notes folder preference (notesFolder) is missing or preferences failed to load. Aborting.");
+    if (preferences) {
+      Logger.log(`Available preference keys loaded: [${Object.keys(preferences).join(", ")}]`);
+    }
     return;
   }
 
@@ -377,7 +387,10 @@ function triggered_MoveKeepNotes() {
   
   const preferences = loadPreferences();
   if (!preferences || !preferences.notesFolder) {
-    Logger.log("Notes folder preference is missing. Aborting.");
+    Logger.log("Notes folder preference (notesFolder) is missing or preferences failed to load. Aborting.");
+    if (preferences) {
+      Logger.log(`Available preference keys loaded: [${Object.keys(preferences).join(", ")}]`);
+    }
     return;
   }
 
@@ -548,6 +561,15 @@ function loadPreferences() {
             }
           }
           preferences[trimmedKey] = processedVal;
+
+          // Normalize keys to camelCase (e.g. "Notes Email" -> "notesEmail") for maximum robustness
+          const camelCaseKey = trimmedKey
+            .replace(/[^a-zA-Z0-9\s-_]/g, '')
+            .replace(/[\s-_]+(.)/g, (_, c) => c.toUpperCase())
+            .replace(/^(.)/, c => c.toLowerCase());
+          if (camelCaseKey && camelCaseKey !== trimmedKey) {
+            preferences[camelCaseKey] = processedVal;
+          }
         }
       }
     }
@@ -669,7 +691,10 @@ function triggered_makeTagIndex() {
   
   const preferences = loadPreferences();
   if (!preferences || !preferences.notesFolder) {
-    Logger.log("Notes folder preference is missing. Aborting triggered_makeTagIndex.");
+    Logger.log("Notes folder preference (notesFolder) is missing or preferences failed to load. Aborting triggered_makeTagIndex.");
+    if (preferences) {
+      Logger.log(`Available preference keys loaded: [${Object.keys(preferences).join(", ")}]`);
+    }
     return;
   }
   const folderName = preferences.notesFolder;
@@ -813,8 +838,8 @@ function triggered_dailyReport() {
 
 /**
  * Trigger wrapper for backing up setup files.
- * Zips all files in "System Files - DO NOT DELETE OR EDIT"
- * and saves to "Capit System Backups" folder in root Drive.
+ * Copies all system files (except the "Trigger Code" spreadsheet)
+ * into a folder in the "Capit System Backups" folder in root Drive.
  */
 function triggered_backupSetupFiles() {
   if (!checkPreferencesFileExists()) {
@@ -844,22 +869,24 @@ function triggered_backupSetupFiles() {
     }
     
     const files = systemFolder.getFiles();
-    const blobs = [];
+    const filesToBackup = [];
     while (files.hasNext()) {
       const file = files.next();
-      // Ensure the blob has the correct filename inside the zip
-      const blob = file.getBlob().setName(file.getName());
-      blobs.push(blob);
+      if (file.getName().trim() === "Trigger Code") {
+        Logger.log("Skipping backup of the 'Trigger Code' spreadsheet.");
+        continue;
+      }
+      filesToBackup.push(file);
     }
     
-    if (blobs.length === 0) {
+    if (filesToBackup.length === 0) {
       Logger.log("No files found in the system folder to backup.");
       return;
     }
     
     const now = new Date();
     const formattedDate = Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
-    const zipFileName = "Capit System Backup-" + formattedDate + ".zip";
+    const backupFolderName = "Capit System Backup-" + formattedDate;
     
     // Get or create "Capit System Backups" in the root of Google Drive
     const rootFolder = DriveApp.getRootFolder();
@@ -872,10 +899,12 @@ function triggered_backupSetupFiles() {
       Logger.log("Created folder 'Capit System Backups' in root.");
     }
     
-    const zipBlob = Utilities.zip(blobs, zipFileName);
-    const createdFile = backupFolder.createFile(zipBlob);
+    const targetFolder = backupFolder.createFolder(backupFolderName);
+    for (const file of filesToBackup) {
+      file.makeCopy(targetFolder);
+    }
     
-    Logger.log(`Successfully backed up system files to "${createdFile.getName()}" in folder "Capit System Backups"`);
+    Logger.log(`Successfully backed up system files to folder "${backupFolderName}" in folder "Capit System Backups"`);
   } catch (e) {
     Logger.log(`An error occurred during triggered_backupSetupFiles: ${e.toString()}`);
   }
@@ -900,7 +929,10 @@ function createDailyReport(startDateTime, endDateTime) {
   
   const preferences = loadPreferences();
   if (!preferences || !preferences.notesFolder) {
-    Logger.log("Notes folder preference is missing. Aborting Daily Report.");
+    Logger.log("Notes folder preference (notesFolder) is missing or preferences failed to load. Aborting Daily Report.");
+    if (preferences) {
+      Logger.log(`Available preference keys loaded: [${Object.keys(preferences).join(", ")}]`);
+    }
     return;
   }
   
