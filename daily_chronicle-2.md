@@ -35,17 +35,17 @@ The Daily Chronicle function executes a multi-step process to compile activity d
   * Formats as: `Log:[Category] - [Body]`.
 
 ### Step 3: Tasks and Lists Parsing
-* **Target:** The `TasksAndLists` system file.
-* **Action:** Parses all categories and items for activity matching today's date.
+* **Target:** SQL database defined in `db.env` (`tasks` table per `schema.md`). (Spreadsheets and JSON files are no longer used).
+* **Action:** Queries tasks for activity matching today's date (and collects task list for deep scan).
 * **Data Captured:**
-  * **Created:** Task creation date matches today.
-  * **Updated (Pending):** Task move-to-pending date matches today.
-  * **Completed:** Task completion date matches today.
+  * **Created:** Task creation date matches today (`date_created`).
+  * **Updated (Pending):** Task move-to-pending date matches today (`date_pending`).
+  * **Completed:** Task completion date matches today (`date_completed`).
 * **Formatting Rule:** Each action (creation, update, completion) is recorded as a distinct chronological entry.
 
 ### Step 4: Calendar Parsing
-* **Target:** The `Calendar Events` system file.
-* **Action:** Parses the JSON array of events for status changes occurring today.
+* **Target:** SQL database defined in `db.env` (`calendar_events` table per `schema.md`). (Spreadsheets and JSON files are no longer used).
+* **Action:** Queries calendar events for status changes occurring today.
 * **Data Captured:**
   * **Created:** `created_at` timestamp matches today.
   * **Completed:** `completed_at` timestamp matches today.

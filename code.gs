@@ -15,11 +15,202 @@
  */
 
 // --- GLOBAL CONSTANTS ---
+const DATABASE_URL = "postgresql://neondb_owner:npg_B7mS0rgpIXet@ep-empty-brook-apxs2s3a-pooler.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require";
 const PREFERENCE_FILE_NAME = 'QuickNoteSuitePreferences-Do-not-Delete-or-Edit';
 const PREFERENCE_PARENT_FOLDER_NAME = 'Notes2';
 const PREFERENCE_SUB_FOLDER_NAME = 'System Files - DO NOT DELETE OR EDIT';
 const PREFERENCE_SPREADSHEET_NAME = 'CapIt-Configuration';
 const PREFERENCE_SHEET_TAB_NAME = 'Config';
+const DB_ENV_FILE_NAME = 'db.env';
+
+/**
+ * Parses a standard PostgreSQL or MySQL database connection URL.
+ * Example: postgresql://user:pass@host:port/dbname?sslmode=require
+ */
+function parseDbUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  let cleanUrl = url.trim();
+  // Strip enclosing quotes if present
+  if ((cleanUrl.startsWith('"') && cleanUrl.endsWith('"')) || (cleanUrl.startsWith("'") && cleanUrl.endsWith("'"))) {
+    cleanUrl = cleanUrl.substring(1, cleanUrl.length - 1).trim();
+  }
+
+  // Regex handles: protocol://user:password@host[:port]/database[?query]
+  const match = cleanUrl.match(/^(?:([^:]+):\/\/)?(?:([^:]+)(?::([^@]*))?@)?([^:\/?#]+)(?::(\d+))?(?:\/([^?#]*))?(?:\?(.*))?$/);
+  if (!match) return null;
+
+  const protocol = match[1] || 'postgresql';
+  const user = match[2] ? decodeURIComponent(match[2]) : '';
+  const password = match[3] ? decodeURIComponent(match[3]) : '';
+  const host = match[4] || '';
+  const port = match[5] || (protocol.toLowerCase().includes('postgres') ? '5432' : '3306');
+  const database = match[6] || '';
+  const queryStr = match[7] || '';
+
+  return {
+    protocol: protocol,
+    user: user,
+    password: password,
+    host: host,
+    port: parseInt(port, 10),
+    database: database,
+    query: queryStr,
+    fullUrl: cleanUrl
+  };
+}
+
+/**
+ * Extracts DATABASE_URL from file text content.
+ */
+function extractDatabaseUrlFromText(content) {
+  if (!content) return null;
+  const lines = content.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line.startsWith('#') || !line) continue;
+    if (line.startsWith('DATABASE_URL=')) {
+      let val = line.substring('DATABASE_URL='.length).trim();
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.substring(1, val.length - 1).trim();
+      }
+      if (val) return val;
+    }
+  }
+  // Fallback: check if the entire content is a database URL
+  const trimmed = content.trim();
+  if (trimmed.startsWith('postgres://') || trimmed.startsWith('postgresql://') || trimmed.startsWith('mysql://')) {
+    return trimmed;
+  }
+  return null;
+}
+
+/**
+ * Retrieves the database configuration from:
+ * 1. Script Properties (DATABASE_URL)
+ * 2. db.env file in Google Drive (search globally, in System Files, Notes folder, or root)
+ * 3. Configuration Spreadsheet (DATABASE_URL key)
+ */
+function getDbConfig() {
+  let dbUrl = null;
+
+  // 0. Hardcoded DATABASE_URL constant at top of script
+  if (typeof DATABASE_URL !== 'undefined' && DATABASE_URL && DATABASE_URL.trim() !== '') {
+    dbUrl = DATABASE_URL;
+  }
+
+  // 1. Script Properties
+  if (!dbUrl) {
+    try {
+      const scriptProps = PropertiesService.getScriptProperties();
+      dbUrl = scriptProps.getProperty('DATABASE_URL');
+      if (dbUrl) {
+        Logger.log("Found DATABASE_URL in Script Properties.");
+      }
+    } catch (e) {
+      Logger.log("Could not check Script Properties for DATABASE_URL: " + e.toString());
+    }
+  }
+
+  // 2. Search Google Drive for db.env (and variations like db.env.txt)
+  if (!dbUrl) {
+    try {
+      const candidateNames = [DB_ENV_FILE_NAME, "db.env.txt", ".env"];
+      for (let n = 0; n < candidateNames.length && !dbUrl; n++) {
+        const files = DriveApp.getFilesByName(candidateNames[n]);
+        while (files.hasNext()) {
+          const file = files.next();
+          try {
+            const content = file.getBlob().getDataAsString();
+            const extracted = extractDatabaseUrlFromText(content);
+            if (extracted) {
+              dbUrl = extracted;
+              Logger.log(`Found DATABASE_URL in Drive file "${file.getName()}".`);
+              break;
+            }
+          } catch (fileErr) {
+            Logger.log(`Error reading file "${file.getName()}": ${fileErr.toString()}`);
+          }
+        }
+      }
+
+      // If still not found, check inside the System Files folder specifically
+      if (!dbUrl) {
+        const sysFolders = DriveApp.getFoldersByName(PREFERENCE_SUB_FOLDER_NAME);
+        while (sysFolders.hasNext() && !dbUrl) {
+          const folder = sysFolders.next();
+          for (let n = 0; n < candidateNames.length && !dbUrl; n++) {
+            const folderFiles = folder.getFilesByName(candidateNames[n]);
+            while (folderFiles.hasNext()) {
+              const file = folderFiles.next();
+              const content = file.getBlob().getDataAsString();
+              const extracted = extractDatabaseUrlFromText(content);
+              if (extracted) {
+                dbUrl = extracted;
+                Logger.log(`Found DATABASE_URL in folder "${PREFERENCE_SUB_FOLDER_NAME}" -> "${file.getName()}".`);
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      // Also check if searchFiles finds any file titled db.env not trashed
+      if (!dbUrl) {
+        const searchIter = DriveApp.searchFiles("title = 'db.env' and trashed = false");
+        while (searchIter.hasNext()) {
+          const file = searchIter.next();
+          const content = file.getBlob().getDataAsString();
+          const extracted = extractDatabaseUrlFromText(content);
+          if (extracted) {
+            dbUrl = extracted;
+            Logger.log(`Found DATABASE_URL via Drive searchFiles for "${file.getName()}".`);
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      Logger.log("Error searching Drive for db.env: " + e.toString());
+    }
+  }
+
+  // 3. Fallback to loaded preferences sheet
+  if (!dbUrl) {
+    try {
+      const prefs = loadPreferences();
+      if (prefs && (prefs.databaseUrl || prefs.DATABASE_URL || prefs.database_url)) {
+        dbUrl = prefs.databaseUrl || prefs.DATABASE_URL || prefs.database_url;
+        Logger.log("Found DATABASE_URL in Configuration sheet preferences.");
+      }
+    } catch (e) {
+      Logger.log("Error checking preferences for DATABASE_URL: " + e.toString());
+    }
+  }
+
+  if (!dbUrl) {
+    return null;
+  }
+
+  return parseDbUrl(dbUrl);
+}
+
+/**
+ * Obtains a JDBC Connection using Google Apps Script's native Jdbc service.
+ */
+function getDbConnection(dbConfig) {
+  if (!dbConfig) throw new Error("No database configuration provided.");
+
+  const isPostgres = dbConfig.protocol.toLowerCase().includes('postgres');
+  let jdbcUrl = "";
+
+  if (isPostgres) {
+    // Google Apps Script Jdbc connects via standard JDBC URL without client SSL query params (sslmode, channel_binding)
+    jdbcUrl = `jdbc:postgresql://${dbConfig.host}:${dbConfig.port}/${dbConfig.database}`;
+  } else {
+    jdbcUrl = `jdbc:mysql://${dbConfig.host}:${dbConfig.port}/${dbConfig.database}`;
+  }
+
+  return Jdbc.getConnection(jdbcUrl, dbConfig.user, dbConfig.password);
+}
 
 // --- MASTER SETUP FUNCTION ---
 
@@ -777,8 +968,8 @@ function triggered_makeTagIndex() {
   
   // 2. Reuse that existing empty paragraph for the text.
   const footerTextPara = footer.getParagraphs()[0];
-  footerTextPara.setText('Generated by Quick Note Suite');
-  footerTextPara.setLinkUrl("https://sites.google.com/view/quick-notes-suite/home");
+  footerTextPara.setText('Generated by Capit');
+  footerTextPara.setLinkUrl("https://markstouttech.com");
   footerTextPara.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
   
   // 3. Insert the Horizontal Rule BEFORE the text paragraph (at index 0).
@@ -971,119 +1162,151 @@ function createDailyReport(startDateTime, endDateTime) {
   
   const systemNames = ["TasksAndLists", "TasksAndLists.json", "Calendar Events", "Calendar Events.json", "Preferences", "Preferences.json", "LogCategories", "LogCategories.json"];
   
-  // --- STEP 3: Tasks and Lists Parsing (Do first to collect allTasks for deep scan) ---
-  const systemFolderName = PREFERENCE_SUB_FOLDER_NAME;
-  const systemFolders = DriveApp.getFoldersByName(systemFolderName);
-  if (systemFolders.hasNext()) {
-    const systemFolder = systemFolders.next();
-    
-    let taskFile = null;
-    let taskFiles = systemFolder.getFilesByName("TasksAndLists");
-    if (taskFiles.hasNext()) {
-      taskFile = taskFiles.next();
-    } else {
-      taskFiles = systemFolder.getFilesByName("TasksAndLists.json");
-      if (taskFiles.hasNext()) {
-        taskFile = taskFiles.next();
-      }
-    }
-    
-    if (taskFile) {
+  // --- STEP 3 & STEP 4: Tasks and Lists & Calendar Parsing ---
+  // Attempt to load from SQL database defined in db.env / schema.md first, falling back to Drive files if needed
+  let loadedFromSql = false;
+  try {
+    const dbConfig = getDbConfig();
+    if (dbConfig) {
+      Logger.log("Connecting to SQL database for Daily Report tasks and calendar data...");
+      const conn = getDbConnection(dbConfig);
       try {
-        const content = taskFile.getBlob().getDataAsString();
-        const taskData = JSON.parse(content);
-        const categories = taskData.categories || [];
-        categories.forEach(cat => {
-          const items = cat.items || [];
-          items.forEach(item => {
-            allTasks.push(item);
-            
-            if (item.date_created) {
-              const d = new Date(item.date_created);
-              if (d >= startDateTime && d <= endDateTime) {
-                events.push({
-                  timestamp: d,
-                  text: `Task Created: ${item.text}`
-                });
-              }
-            }
-            if (item.date_completed) {
-              const d = new Date(item.date_completed);
-              if (d >= startDateTime && d <= endDateTime) {
-                events.push({
-                  timestamp: d,
-                  text: `Task Completed: ${item.text}`
-                });
-              }
-            }
-            if (item.date_pending) {
-              const d = new Date(item.date_pending);
-              if (d >= startDateTime && d <= endDateTime) {
-                events.push({
-                  timestamp: d,
-                  text: `Task Moved to Pending: ${item.text}`
-                });
-              }
-            }
+        // Query tasks created, completed, or moved to pending within the window
+        // Also fetch all open/recent tasks to populate allTasks for deep scan (Step 5)
+        const account = dbConfig.user || 'markstout@gmail.com'; // Default per schema.md
+
+        // 1. All tasks for Step 5 deep scan
+        const taskStmt = conn.prepareStatement("SELECT id, text FROM tasks");
+        const rsTasks = taskStmt.executeQuery();
+        while (rsTasks.next()) {
+          allTasks.push({
+            id: rsTasks.getString("id"),
+            text: rsTasks.getString("text")
           });
-        });
-      } catch (e) {
-        Logger.log(`Error parsing TasksAndLists: ${e.toString()}`);
+        }
+        rsTasks.close();
+        taskStmt.close();
+
+        // 2. Tasks with activity in date range
+        const taskActStmt = conn.prepareStatement(
+          "SELECT text, status, date_created, date_completed, date_pending, completion_note FROM tasks WHERE " +
+          "(date_created >= ? AND date_created <= ?) OR " +
+          "(date_completed >= ? AND date_completed <= ?) OR " +
+          "(date_pending >= ? AND date_pending <= ?)"
+        );
+        const startTs = Jdbc.newTimestamp(startDateTime.getTime());
+        const endTs = Jdbc.newTimestamp(endDateTime.getTime());
+        taskActStmt.setTimestamp(1, startTs);
+        taskActStmt.setTimestamp(2, endTs);
+        taskActStmt.setTimestamp(3, startTs);
+        taskActStmt.setTimestamp(4, endTs);
+        taskActStmt.setTimestamp(5, startTs);
+        taskActStmt.setTimestamp(6, endTs);
+
+        const rsTaskAct = taskActStmt.executeQuery();
+        while (rsTaskAct.next()) {
+          const tText = rsTaskAct.getString("text");
+          const tNote = rsTaskAct.getString("completion_note");
+          const dc = rsTaskAct.getTimestamp("date_created");
+          const dcomp = rsTaskAct.getTimestamp("date_completed");
+          const dp = rsTaskAct.getTimestamp("date_pending");
+
+          if (dc) {
+            const d = new Date(dc.getTime());
+            if (d >= startDateTime && d <= endDateTime) {
+              events.push({
+                timestamp: d,
+                text: `Task Created: ${tText}`
+              });
+            }
+          }
+          if (dcomp) {
+            const d = new Date(dcomp.getTime());
+            if (d >= startDateTime && d <= endDateTime) {
+              const noteSuffix = tNote ? ` - Note: ${tNote.trim()}` : "";
+              events.push({
+                timestamp: d,
+                text: `Task Completed: ${tText}${noteSuffix}`
+              });
+            }
+          }
+          if (dp) {
+            const d = new Date(dp.getTime());
+            if (d >= startDateTime && d <= endDateTime) {
+              events.push({
+                timestamp: d,
+                text: `Task Moved to Pending: ${tText}`
+              });
+            }
+          }
+        }
+        rsTaskAct.close();
+        taskActStmt.close();
+
+        // 3. Calendar events with activity in date range
+        const calActStmt = conn.prepareStatement(
+          "SELECT title, created_at, completed_at, cancelled_at, completion_note FROM calendar_events WHERE " +
+          "(created_at >= ? AND created_at <= ?) OR " +
+          "(completed_at >= ? AND completed_at <= ?) OR " +
+          "(cancelled_at >= ? AND cancelled_at <= ?)"
+        );
+        calActStmt.setTimestamp(1, startTs);
+        calActStmt.setTimestamp(2, endTs);
+        calActStmt.setTimestamp(3, startTs);
+        calActStmt.setTimestamp(4, endTs);
+        calActStmt.setTimestamp(5, startTs);
+        calActStmt.setTimestamp(6, endTs);
+
+        const rsCalAct = calActStmt.executeQuery();
+        while (rsCalAct.next()) {
+          const cTitle = rsCalAct.getString("title") || "Unnamed Event";
+          const cNote = rsCalAct.getString("completion_note");
+          const cCre = rsCalAct.getTimestamp("created_at");
+          const cComp = rsCalAct.getTimestamp("completed_at");
+          const cCanc = rsCalAct.getTimestamp("cancelled_at");
+
+          if (cCre) {
+            const d = new Date(cCre.getTime());
+            if (d >= startDateTime && d <= endDateTime) {
+              events.push({
+                timestamp: d,
+                text: `Calendar Event Created: ${cTitle}`
+              });
+            }
+          }
+          if (cComp) {
+            const d = new Date(cComp.getTime());
+            if (d >= startDateTime && d <= endDateTime) {
+              const noteSuffix = cNote ? ` - Note: ${cNote.trim()}` : "";
+              events.push({
+                timestamp: d,
+                text: `Calendar Event Completed: ${cTitle}${noteSuffix}`
+              });
+            }
+          }
+          if (cCanc) {
+            const d = new Date(cCanc.getTime());
+            if (d >= startDateTime && d <= endDateTime) {
+              events.push({
+                timestamp: d,
+                text: `Calendar Event Cancelled: ${cTitle}`
+              });
+            }
+          }
+        }
+        rsCalAct.close();
+        calActStmt.close();
+
+        loadedFromSql = true;
+        Logger.log("Successfully loaded tasks and calendar events from SQL database.");
+      } finally {
+        conn.close();
       }
-    }
-    
-    // --- STEP 4: Calendar Parsing ---
-    let calFile = null;
-    let calFiles = systemFolder.getFilesByName("Calendar Events");
-    if (calFiles.hasNext()) {
-      calFile = calFiles.next();
     } else {
-      calFiles = systemFolder.getFilesByName("Calendar Events.json");
-      if (calFiles.hasNext()) {
-        calFile = calFiles.next();
-      }
+      Logger.log("Database configuration could not be found (DATABASE_URL in Script Properties, db.env, or preferences).");
     }
-    
-    if (calFile) {
-      try {
-        const content = calFile.getBlob().getDataAsString();
-        const calData = JSON.parse(content);
-        const eventsArray = Array.isArray(calData) ? calData : (calData.events || []);
-        eventsArray.forEach(evt => {
-          const title = evt.summary || evt.title || evt.text || evt.name || evt.subject || "Unnamed Event";
-          
-          if (evt.created_at || evt.created) {
-            const d = new Date(evt.created_at || evt.created);
-            if (d >= startDateTime && d <= endDateTime) {
-              events.push({
-                timestamp: d,
-                text: `Calendar Event Created: ${title}`
-              });
-            }
-          }
-          if (evt.completed_at || evt.completed) {
-            const d = new Date(evt.completed_at || evt.completed);
-            if (d >= startDateTime && d <= endDateTime) {
-              events.push({
-                timestamp: d,
-                text: `Calendar Event Completed: ${title}`
-              });
-            }
-          }
-          if (evt.cancelled_at || evt.cancelled) {
-            const d = new Date(evt.cancelled_at || evt.cancelled);
-            if (d >= startDateTime && d <= endDateTime) {
-              events.push({
-                timestamp: d,
-                text: `Calendar Event Cancelled: ${title}`
-              });
-            }
-          }
-        });
-      } catch (e) {
-        Logger.log(`Error parsing Calendar Events system file: ${e.toString()}`);
-      }
-    }
+  } catch (sqlEx) {
+    Logger.log(`SQL Database query failed (${sqlEx.toString()}). Tasks and calendar events could not be loaded.`);
   }
   
   // --- STEP 1: Document & Spreadsheet Creations ---
@@ -1316,10 +1539,10 @@ function createDailyReport(startDateTime, endDateTime) {
   
   // Footer
   body.appendParagraph("").appendHorizontalRule();
-  const footerPara = body.appendParagraph("Generated by Quick Note Suite");
+  const footerPara = body.appendParagraph("Generated by Capit");
   footerPara.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
   const footerText = footerPara.editAsText();
-  footerText.setLinkUrl("https://sites.google.com/view/quick-notes-suite/home");
+  footerText.setLinkUrl("https://markstouttech.com");
   footerText.setForegroundColor("#888888");
   footerText.setFontSize(10);
   footerText.setBold(true);
