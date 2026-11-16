@@ -2,7 +2,7 @@
  * Quick Notes Suite - Trigger Code
  * Copyright 2026 Mark A. Stout
  * Last Updated : 6-2-2026
- * see https://sites.google.com/view/quick-notes-suite
+ * see https://markstouttech.com/Capit.html
  * * @fileoverview Google App Script functions for the QuickNoteSuite Trigger Handler.
  * This script is intended to be a separate project from the main web app.
  * Its sole purpose is to run background tasks based on time-driven triggers.
@@ -14,6 +14,7 @@
  * function MANUALLY from the script editor ONCE for that user's account.
  */
 
+
 // --- GLOBAL CONSTANTS ---
 const DATABASE_URL = "postgresql://neondb_owner:npg_B7mS0rgpIXet@ep-empty-brook-apxs2s3a-pooler.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require";
 const PREFERENCE_FILE_NAME = 'QuickNoteSuitePreferences-Do-not-Delete-or-Edit';
@@ -22,6 +23,12 @@ const PREFERENCE_SUB_FOLDER_NAME = 'System Files - DO NOT DELETE OR EDIT';
 const PREFERENCE_SPREADSHEET_NAME = 'CapIt-Configuration';
 const PREFERENCE_SHEET_TAB_NAME = 'Config';
 const DB_ENV_FILE_NAME = 'db.env';
+const TASKS_CALENDAR_SPREADSHEET_NAME = 'CapIt-Tasks-And-Calendar';
+const COMPLETED_ARCHIVE_SPREADSHEET_NAME = 'Completed Tasks and Events';
+const TASKS_SHEET_TAB_NAME = 'Tasks';
+const CALENDAR_EVENTS_SHEET_TAB_NAME = 'Calendar Events';
+const CONTACTS_SHEET_TAB_NAME = 'Contacts';
+
 
 /**
  * Parses a standard PostgreSQL or MySQL database connection URL.
@@ -35,9 +42,11 @@ function parseDbUrl(url) {
     cleanUrl = cleanUrl.substring(1, cleanUrl.length - 1).trim();
   }
 
+
   // Regex handles: protocol://user:password@host[:port]/database[?query]
   const match = cleanUrl.match(/^(?:([^:]+):\/\/)?(?:([^:]+)(?::([^@]*))?@)?([^:\/?#]+)(?::(\d+))?(?:\/([^?#]*))?(?:\?(.*))?$/);
   if (!match) return null;
+
 
   const protocol = match[1] || 'postgresql';
   const user = match[2] ? decodeURIComponent(match[2]) : '';
@@ -46,6 +55,7 @@ function parseDbUrl(url) {
   const port = match[5] || (protocol.toLowerCase().includes('postgres') ? '5432' : '3306');
   const database = match[6] || '';
   const queryStr = match[7] || '';
+
 
   return {
     protocol: protocol,
@@ -58,6 +68,7 @@ function parseDbUrl(url) {
     fullUrl: cleanUrl
   };
 }
+
 
 /**
  * Extracts DATABASE_URL from file text content.
@@ -84,6 +95,7 @@ function extractDatabaseUrlFromText(content) {
   return null;
 }
 
+
 /**
  * Retrieves the database configuration from:
  * 1. Script Properties (DATABASE_URL)
@@ -93,10 +105,12 @@ function extractDatabaseUrlFromText(content) {
 function getDbConfig() {
   let dbUrl = null;
 
+
   // 0. Hardcoded DATABASE_URL constant at top of script
   if (typeof DATABASE_URL !== 'undefined' && DATABASE_URL && DATABASE_URL.trim() !== '') {
     dbUrl = DATABASE_URL;
   }
+
 
   // 1. Script Properties
   if (!dbUrl) {
@@ -110,6 +124,7 @@ function getDbConfig() {
       Logger.log("Could not check Script Properties for DATABASE_URL: " + e.toString());
     }
   }
+
 
   // 2. Search Google Drive for db.env (and variations like db.env.txt)
   if (!dbUrl) {
@@ -133,6 +148,7 @@ function getDbConfig() {
         }
       }
 
+
       // If still not found, check inside the System Files folder specifically
       if (!dbUrl) {
         const sysFolders = DriveApp.getFoldersByName(PREFERENCE_SUB_FOLDER_NAME);
@@ -154,6 +170,7 @@ function getDbConfig() {
         }
       }
 
+
       // Also check if searchFiles finds any file titled db.env not trashed
       if (!dbUrl) {
         const searchIter = DriveApp.searchFiles("title = 'db.env' and trashed = false");
@@ -173,6 +190,7 @@ function getDbConfig() {
     }
   }
 
+
   // 3. Fallback to loaded preferences sheet
   if (!dbUrl) {
     try {
@@ -186,12 +204,15 @@ function getDbConfig() {
     }
   }
 
+
   if (!dbUrl) {
     return null;
   }
 
+
   return parseDbUrl(dbUrl);
 }
+
 
 /**
  * Obtains a JDBC Connection using Google Apps Script's native Jdbc service.
@@ -199,8 +220,10 @@ function getDbConfig() {
 function getDbConnection(dbConfig) {
   if (!dbConfig) throw new Error("No database configuration provided.");
 
+
   const isPostgres = dbConfig.protocol.toLowerCase().includes('postgres');
   let jdbcUrl = "";
+
 
   if (isPostgres) {
     // Google Apps Script Jdbc connects via standard JDBC URL without client SSL query params (sslmode, channel_binding)
@@ -209,10 +232,13 @@ function getDbConnection(dbConfig) {
     jdbcUrl = `jdbc:mysql://${dbConfig.host}:${dbConfig.port}/${dbConfig.database}`;
   }
 
+
   return Jdbc.getConnection(jdbcUrl, dbConfig.user, dbConfig.password);
 }
 
+
 // --- MASTER SETUP FUNCTION ---
+
 
 /**
  * Deletes all existing triggers for this project and creates new ones.
@@ -221,22 +247,27 @@ function getDbConnection(dbConfig) {
 function setupTriggers() {
   const ui = SpreadsheetApp.getUi(); // Assumes this is run from a spreadsheet
 
+
   // Safety Check: Do not run if the user hasn't completed the web app setup.
   if (!checkPreferencesFileExists()) {
     ui.alert("Preferences file not found. Please complete the web app setup before creating triggers. Aborting.");
     return;
   }
 
+
   const removedCount = deleteAllTriggers();
   ui.alert(`${removedCount} existing trigger(s) have been deleted. Press OK to regenerate the triggers with updated versions.`);
 
+
   let createdCount = 0;
+
 
   const triggerFunctions = [
     'triggered_processEmailsToDoc',
     'triggered_convertTextNotesToDoc',
     'triggered_MoveKeepNotes'
   ];
+
 
   triggerFunctions.forEach(function(functionName) {
     try {
@@ -257,6 +288,7 @@ function setupTriggers() {
       createdCount++;
     }
   });
+
 
   try {
     ScriptApp.newTrigger('triggered_makeTagIndex')
@@ -280,6 +312,7 @@ function setupTriggers() {
     createdCount++;
   }
 
+
   try {
     ScriptApp.newTrigger('triggered_dailyReport')
       .timeBased()
@@ -301,6 +334,7 @@ function setupTriggers() {
     Logger.log(`Successfully created daily 3 AM to 4 AM trigger for triggered_dailyReport (without error notifications).`);
     createdCount++;
   }
+
 
   try {
     ScriptApp.newTrigger('triggered_backupSetupFiles')
@@ -332,10 +366,12 @@ function setupTriggers() {
       const notesFolderName = preferences.notesFolder;
       const systemFolderName = PREFERENCE_SUB_FOLDER_NAME;
 
+
       const parentFolders = DriveApp.getFoldersByName(notesFolderName);
       if (parentFolders.hasNext()) {
         const parentFolder = parentFolders.next();
         const systemFolders = parentFolder.getFoldersByName(systemFolderName);
+
 
         if (systemFolders.hasNext()) {
           const targetFolder = systemFolders.next();
@@ -362,11 +398,14 @@ function setupTriggers() {
       ui.alert(`Warning: Triggers were created, but the script file could not be automatically organized. Error: ${e.message}`);
   }
 
+
   ui.alert(`All ${createdCount} triggers have been set up and completed successfully.\n\nYou may now close this spreadsheet.`);
 }
 
 
+
 // --- TRIGGER-BASED FUNCTIONS (These run in the background) ---
+
 
 /**
  * Processes emails based on preferences, generating Google Docs for each.
@@ -380,6 +419,7 @@ function triggered_processEmailsToDoc() {
     Logger.log("Failed to load or parse preferences. Aborting email processing.");
     return;
   }
+
 
   const notesEmailAddress = preferences.notesEmail;
   const yourGmailAddress = preferences.yourGmailAddress;
@@ -408,13 +448,16 @@ function triggered_processEmailsToDoc() {
   const pendingLabel = getOrCreateLabel(rawNotesEmailLabel);
   const archiveLabel = getOrCreateLabel('Notes Processed');
 
+
   if (!targetDocFolder || !targetAttachmentFolder || !pendingLabel || !archiveLabel) {
     Logger.log("Could not find or create a required folder or label. Aborting.");
     return;
   }
 
+
   const searchQuery = `from:${yourGmailAddress} to:${notesEmailAddress} label:${notesEmailLabelForSearch}`;
   Logger.log(`Final Gmail search query: "${searchQuery}"`);
+
 
   try {
     const threads = GmailApp.search(searchQuery);
@@ -422,6 +465,7 @@ function triggered_processEmailsToDoc() {
       Logger.log("No matching email threads found.");
       return;
     }
+
 
     Logger.log(`Found ${threads.length} email threads.`);
     threads.forEach(thread => {
@@ -433,14 +477,17 @@ function triggered_processEmailsToDoc() {
       const messageBodyPlain = message.getPlainBody();
       const threadUrl = thread.getPermalink();
 
+
       const docTitle = `Email - ${subject.substring(0, 50)} - ${Utilities.formatDate(date, Session.getScriptTimeZone(), "MM/dd/YYYY HH:mm")}`;
       const newDoc = DocumentApp.create(docTitle);
       const docBody = newDoc.getBody();
+
 
       addStandardDocHeader(newDoc, date, subject, threadUrl, sender);
       
       docBody.appendParagraph(messageBodyPlain);
       docBody.appendParagraph("");
+
 
       const MAX_IMAGE_WIDTH = 500;
       if (attachments.length > 0) {
@@ -449,6 +496,7 @@ function triggered_processEmailsToDoc() {
         headingStyle[DocumentApp.Attribute.FONT_SIZE] = 14;
         headingStyle[DocumentApp.Attribute.BOLD] = true;
         attachmentsHeading.setAttributes(headingStyle);
+
 
         attachments.forEach(attachment => {
           const attachmentName = attachment.getName();
@@ -484,11 +532,13 @@ function triggered_processEmailsToDoc() {
         docBody.appendParagraph("No attachments found.");
       }
 
+
       addStandardDocFooter(newDoc);
       const file = DriveApp.getFileById(newDoc.getId());
       targetDocFolder.addFile(file);
       DriveApp.getRootFolder().removeFile(file);
       Logger.log(`Created Google Doc for email "${subject}" at: ${newDoc.getUrl()}`);
+
 
       thread.addLabel(archiveLabel);
       thread.removeLabel(pendingLabel);
@@ -498,6 +548,7 @@ function triggered_processEmailsToDoc() {
     Logger.log(`An error occurred during email processing: ${e.toString()}`);
   }
 }
+
 
 function triggered_convertTextNotesToDoc() {
   if (!checkPreferencesFileExists()) { return; } 
@@ -512,11 +563,13 @@ function triggered_convertTextNotesToDoc() {
     return;
   }
 
+
   const targetFolder = getOrCreateFolder(DriveApp, preferences.notesFolder);
   if (!targetFolder) {
     Logger.log(`Could not find or create target notes folder. Aborting.`);
     return;
   }
+
 
   try {
     const files = targetFolder.getFilesByType('text/plain');
@@ -533,6 +586,7 @@ function triggered_convertTextNotesToDoc() {
         const newDoc = DocumentApp.create(docTitle);
         const docBody = newDoc.getBody();
 
+
         addStandardDocHeader(newDoc, fileDate, fileName, fileUrl, "File Conversion");
         const fullContentHeading = docBody.appendParagraph("--- Full File Content ---");
         
@@ -541,16 +595,20 @@ function triggered_convertTextNotesToDoc() {
         headingStyle[DocumentApp.Attribute.BOLD] = true;
         fullContentHeading.setAttributes(headingStyle);
 
+
         const contentParagraph = docBody.appendParagraph(fileContent);
+
 
         const textElement = contentParagraph.editAsText();
         const urlRegex = /(https?:\/\/[^\s]+)/g;
         const match = urlRegex.exec(fileContent);
 
+
         if (match && match[0]) {
           const linkUrl = match[0];
           textElement.setLinkUrl(0, textElement.getText().length - 1, linkUrl);
         }
+
 
         addStandardDocFooter(newDoc);
         const newDocFile = DriveApp.getFileById(newDoc.getId());
@@ -560,6 +618,7 @@ function triggered_convertTextNotesToDoc() {
         
         file.setTrashed(true);
         Logger.log(`Trashed original file: "${fileName}"`);
+
 
         filesProcessed++;
       } catch (fileProcessError) {
@@ -571,6 +630,7 @@ function triggered_convertTextNotesToDoc() {
     Logger.log(`An error occurred during notes folder file processing: ${e.toString()}`);
   }
 }
+
 
 function triggered_MoveKeepNotes() {
   if (!checkPreferencesFileExists()) { return; }
@@ -585,11 +645,13 @@ function triggered_MoveKeepNotes() {
     return;
   }
 
+
   const targetFolder = getOrCreateFolder(DriveApp, preferences.notesFolder);
   if (!targetFolder) {
     Logger.log(`Could not find or create target notes folder. Aborting.`);
     return;
   }
+
 
   const keepDocTitle = "Google Keep Document";
   try {
@@ -616,7 +678,9 @@ function triggered_MoveKeepNotes() {
 
 
 
+
 // --- HELPER & DIAGNOSTIC FUNCTIONS ---
+
 
 function deleteAllTriggers() {
   const allTriggers = ScriptApp.getProjectTriggers();
@@ -627,6 +691,7 @@ function deleteAllTriggers() {
   Logger.log(count + ' triggers deleted.');
   return count;
 }
+
 
 function addStandardDocHeader(doc, date, title, url, source) {
   const docBody = doc.getBody();
@@ -639,9 +704,11 @@ function addStandardDocHeader(doc, date, title, url, source) {
   style[DocumentApp.Attribute.FONT_FAMILY] = 'Arial';
   titleParagraph.setAttributes(style);
 
+
   if (url) {
     const urlParagraph = docBody.appendParagraph("URL: ");
     urlParagraph.appendText(url).setLinkUrl(url);
+
 
     try {
       const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
@@ -660,11 +727,13 @@ function addStandardDocHeader(doc, date, title, url, source) {
     }
   }
 
+
   docBody.appendParagraph(`Date: ${date.toLocaleString()}`);
   docBody.appendParagraph(`Source: ${source}`);
   docBody.appendParagraph("").appendHorizontalRule();
   docBody.appendParagraph("");
 }
+
 
 function addStandardDocFooter(doc) {
   Logger.log("addStandardDocFooter: Adding footer to document.");
@@ -672,20 +741,23 @@ function addStandardDocFooter(doc) {
   docBody.appendParagraph("");
   docBody.appendHorizontalRule();
   const footerParagraph = docBody.appendParagraph("Created with ");
-  footerParagraph.appendText("Quick Notes Suite").setLinkUrl("https://sites.google.com/view/quick-notes-suite");
+  footerParagraph.appendText("Capit").setLinkUrl("https://markstouttech.com/Capit.html");
   footerParagraph.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
   footerParagraph.setBold(true);
   Logger.log("addStandardDocFooter: Footer added.");
 }
+
 
 function checkPreferencesFileExists() {
   // This improved function directly checks if the preferences can be loaded.
   return loadPreferences() !== null;
 }
 
+
 function loadPreferences() {
   try {
     let ss = null;
+
 
     // 1. Try checking the active spreadsheet first, in case the script is container-bound to CapIt-Configuration or the trigger sheet
     try {
@@ -698,6 +770,7 @@ function loadPreferences() {
     } catch (e) {
       Logger.log("Could not access active spreadsheet or not container-bound: " + e.toString());
     }
+
 
     // 2. If not found or didn't have the Config tab, search Google Drive for the CapIt-Configuration spreadsheet
     if (!ss) {
@@ -718,10 +791,12 @@ function loadPreferences() {
       }
     }
 
+
     if (!ss) {
       Logger.log(`Preferences Error: Spreadsheet "${PREFERENCE_SPREADSHEET_NAME}" with tab "${PREFERENCE_SHEET_TAB_NAME}" was not found.`);
       return null;
     }
+
 
     const configSheet = ss.getSheetByName(PREFERENCE_SHEET_TAB_NAME);
     if (!configSheet) {
@@ -729,9 +804,11 @@ function loadPreferences() {
       return null;
     }
 
+
     const range = configSheet.getDataRange();
     const values = range.getValues();
     const preferences = {};
+
 
     for (let i = 0; i < values.length; i++) {
       const key = values[i][0];
@@ -753,6 +830,7 @@ function loadPreferences() {
           }
           preferences[trimmedKey] = processedVal;
 
+
           // Normalize keys to camelCase (e.g. "Notes Email" -> "notesEmail") for maximum robustness
           const camelCaseKey = trimmedKey
             .replace(/[^a-zA-Z0-9\s-_]/g, '')
@@ -765,10 +843,12 @@ function loadPreferences() {
       }
     }
 
+
     if (Object.keys(preferences).length === 0) {
       Logger.log(`Preferences Error: No configuration entries found in tab "${PREFERENCE_SHEET_TAB_NAME}".`);
       return null;
     }
+
 
     return preferences;
   } catch (e) {
@@ -776,6 +856,7 @@ function loadPreferences() {
     return null;
   }
 }
+
 
 function getOrCreateFolder(parent, name) {
   const folders = parent.getFoldersByName(name);
@@ -786,6 +867,7 @@ function getOrCreateFolder(parent, name) {
   }
 }
 
+
 function getOrCreateLabel(name) {
   let label = GmailApp.getUserLabelByName(name);
   if (!label) {
@@ -794,12 +876,14 @@ function getOrCreateLabel(name) {
   return label;
 }
 
+
 /**
  * A diagnostic function to list all plain text (.txt) files in the notes folder.
  * This is intended to be run manually from the script editor for debugging.
  */
 function listTextFilesInNotesFolder() {
   Logger.log("--- Starting Diagnostic: Listing Text Files ---");
+
 
   const preferences = loadPreferences();
   if (!preferences || !preferences.notesFolder) {
@@ -808,6 +892,7 @@ function listTextFilesInNotesFolder() {
   }
   const notesFolderName = preferences.notesFolder;
   Logger.log(`🔎 Preference loaded. Will search in folder named: "${notesFolderName}"`);
+
 
   const folders = DriveApp.getFoldersByName(notesFolderName);
   if (!folders.hasNext()) {
@@ -818,12 +903,15 @@ function listTextFilesInNotesFolder() {
   const targetFolder = folders.next();
   Logger.log(`✅ Successfully found folder: "${targetFolder.getName()}"`);
 
+
   const files = targetFolder.getFilesByType(MimeType.PLAIN_TEXT);
+
 
   if (!files.hasNext()) {
     Logger.log("📂 No text (.txt) files were found in this folder.");
     return;
   }
+
 
   let fileCount = 0;
   Logger.log("--- Found Files ---");
@@ -837,6 +925,7 @@ function listTextFilesInNotesFolder() {
 }
 
 
+
 /**
  * Recursively scans a folder and its subfolders for files containing the tag marker in their title.
  * Excludes folders listed in excludeFolderNames.
@@ -847,8 +936,10 @@ function getFilesRecursive(folder, taggedFiles, excludeFolderNames, marker) {
     return;
   }
 
+
   const escapedMarker = marker.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
   const tagRegex = new RegExp(escapedMarker + '(\\w+)', 'g');
+
 
   const files = folder.getFiles();
   while (files.hasNext()) {
@@ -871,11 +962,13 @@ function getFilesRecursive(folder, taggedFiles, excludeFolderNames, marker) {
     }
   }
 
+
   const subfolders = folder.getFolders();
   while (subfolders.hasNext()) {
     getFilesRecursive(subfolders.next(), taggedFiles, excludeFolderNames, marker);
   }
 }
+
 
 function triggered_makeTagIndex() {
   const startTime = new Date();
@@ -891,10 +984,12 @@ function triggered_makeTagIndex() {
   const folderName = preferences.notesFolder;
   const folders = DriveApp.getFoldersByName(folderName);
 
+
   if (!folders.hasNext()) {
     Logger.log(`Folder '${folderName}' not found.`);
     return;
   }
+
 
   const notesFolder = folders.next();
   Logger.log(`Target notes folder: "${notesFolder.getName()}" (ID: ${notesFolder.getId()})`);
@@ -907,18 +1002,23 @@ function triggered_makeTagIndex() {
     "System Files - DO NOT DELETE OR EDIT"
   ];
 
+
   getFilesRecursive(notesFolder, taggedFiles, excludeFolders, marker);
 
+
   const sortedTags = Object.keys(taggedFiles).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+
 
   if (sortedTags.length === 0) {
     Logger.log("No tagged files found.");
     return;
   }
 
+
   const docName = 'Tag Index';
   const existingFiles = notesFolder.getFilesByName(docName);
   let doc;
+
 
   if (existingFiles.hasNext()) {
     const file = existingFiles.next();
@@ -953,6 +1053,7 @@ function triggered_makeTagIndex() {
   
   body.appendHorizontalRule();
 
+
   // Footer Logic
   let footer = doc.getFooter();
   if (!footer) {
@@ -969,7 +1070,7 @@ function triggered_makeTagIndex() {
   // 2. Reuse that existing empty paragraph for the text.
   const footerTextPara = footer.getParagraphs()[0];
   footerTextPara.setText('Generated by Capit');
-  footerTextPara.setLinkUrl("https://markstouttech.com");
+  footerTextPara.setLinkUrl("https://markstouttech.com/Capit.html");
   footerTextPara.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
   
   // 3. Insert the Horizontal Rule BEFORE the text paragraph (at index 0).
@@ -977,13 +1078,16 @@ function triggered_makeTagIndex() {
   
   // --- FIX END ---
 
+
   const startTimeText = 'Index Created at : ' + Utilities.formatDate(startTime, Session.getScriptTimeZone(), "MM/dd/yyyy, h:mm:ss a");
   body.appendParagraph(startTimeText);
+
 
   const endTime = new Date();
   const duration = (endTime.getTime() - startTime.getTime()) / 1000;
   const durationText = 'Duration of Run: ' + duration + ' seconds';
   body.appendParagraph(durationText);
+
 
   sortedTags.forEach(tag => {
     body.appendParagraph(tag).setHeading(DocumentApp.ParagraphHeading.HEADING2);
@@ -993,8 +1097,10 @@ function triggered_makeTagIndex() {
     });
   });
 
+
   doc.saveAndClose();
 }
+
 
 /**
  * Trigger wrapper for Daily Report.
@@ -1005,19 +1111,23 @@ function triggered_dailyReport() {
   const currentHour = now.getHours();
   let targetDate = new Date(now);
 
+
   // If before 6 AM, Set target to Yesterday
   if (currentHour < 6) {
     targetDate.setDate(now.getDate() - 1);
   }
   // Otherwise, target remains Today
 
+
   // Set start to 00:00:00
   targetDate.setHours(0, 0, 0, 0);
   const startDateTime = new Date(targetDate);
 
+
   // Set end to 23:59:59
   targetDate.setHours(23, 59, 59, 999);
   const endDateTime = new Date(targetDate);
+
 
   Logger.log(`Running Daily Report for date: ${startDateTime.toLocaleDateString()} (Window: ${startDateTime.toLocaleString()} - ${endDateTime.toLocaleString()})`);
   
@@ -1026,6 +1136,7 @@ function triggered_dailyReport() {
   Logger.log("Creating/updating Tag Index...");
   triggered_makeTagIndex();
 }
+
 
 /**
  * Trigger wrapper for backing up setup files.
@@ -1101,6 +1212,7 @@ function triggered_backupSetupFiles() {
   }
 }
 
+
 /**
  * Generates a Daily Report Doc listing files created and modified in the given range.
  * Time [HH:mm] is plain text and not part of the clickable link.
@@ -1115,6 +1227,7 @@ function createDailyReport(startDateTime, endDateTime) {
     endDateTime.setHours(23, 59, 59, 999);
     Logger.log("Manual execution detected. Defaulting to Today: " + startDateTime.toLocaleDateString());
   }
+
 
   const startTime = new Date(); 
   
@@ -1148,8 +1261,16 @@ function createDailyReport(startDateTime, endDateTime) {
   const startStr = `${yyyy}-${mm}-${dd}T00:00:00Z`;
   const endStr = `${yyyy}-${mm}-${dd}T23:59:59Z`;
   
-  // We collect chronological events in this array
-  const events = [];
+  // Dedicated collections for report sections
+  const tasksCompleted = [];
+  const eventsCompleted = [];
+  const filesCreated = [];
+  const tasksCreated = [];
+  const eventsCreated = [];
+  const contactsCreatedOrUpdated = [];
+
+  // Master chronological timeline
+  const chronologicalEvents = [];
   const allTasks = [];
   
   // Resolve Log folder
@@ -1160,154 +1281,358 @@ function createDailyReport(startDateTime, endDateTime) {
     logFolderId = logFolders.next().getId();
   }
   
-  const systemNames = ["TasksAndLists", "TasksAndLists.json", "Calendar Events", "Calendar Events.json", "Preferences", "Preferences.json", "LogCategories", "LogCategories.json"];
+  const systemNames = ["TasksAndLists", "TasksAndLists.json", "Calendar Events", "Calendar Events.json", "Preferences", "Preferences.json", "LogCategories", "LogCategories.json", TASKS_CALENDAR_SPREADSHEET_NAME, COMPLETED_ARCHIVE_SPREADSHEET_NAME];
   
-  // --- STEP 3 & STEP 4: Tasks and Lists & Calendar Parsing ---
-  // Attempt to load from SQL database defined in db.env / schema.md first, falling back to Drive files if needed
-  let loadedFromSql = false;
+  // --- STEP 3 & STEP 4: Tasks and Lists & Calendar Parsing from Google Sheets ---
   try {
-    const dbConfig = getDbConfig();
-    if (dbConfig) {
-      Logger.log("Connecting to SQL database for Daily Report tasks and calendar data...");
-      const conn = getDbConnection(dbConfig);
+    let tasksSpreadsheet = null;
+
+    // 1. Check preferences for tasksCalendarFileId if configured
+    if (preferences.tasksCalendarFileId) {
       try {
-        // Query tasks created, completed, or moved to pending within the window
-        // Also fetch all open/recent tasks to populate allTasks for deep scan (Step 5)
-        const account = dbConfig.user || 'markstout@gmail.com'; // Default per schema.md
+        tasksSpreadsheet = SpreadsheetApp.openById(preferences.tasksCalendarFileId);
+      } catch (e) {
+        Logger.log(`Failed opening tasks spreadsheet by ID (${preferences.tasksCalendarFileId}): ${e.toString()}`);
+      }
+    }
 
-        // 1. All tasks for Step 5 deep scan
-        const taskStmt = conn.prepareStatement("SELECT id, text FROM tasks");
-        const rsTasks = taskStmt.executeQuery();
-        while (rsTasks.next()) {
-          allTasks.push({
-            id: rsTasks.getString("id"),
-            text: rsTasks.getString("text")
-          });
+    // 2. Search inside System Files subfolder
+    if (!tasksSpreadsheet) {
+      const sysFolderIter = DriveApp.getFoldersByName(PREFERENCE_SUB_FOLDER_NAME);
+      if (sysFolderIter.hasNext()) {
+        const sysFolder = sysFolderIter.next();
+        const files = sysFolder.getFilesByName(TASKS_CALENDAR_SPREADSHEET_NAME);
+        if (files.hasNext()) {
+          tasksSpreadsheet = SpreadsheetApp.open(files.next());
         }
-        rsTasks.close();
-        taskStmt.close();
+      }
+    }
 
-        // 2. Tasks with activity in date range
-        const taskActStmt = conn.prepareStatement(
-          "SELECT text, status, date_created, date_completed, date_pending, completion_note FROM tasks WHERE " +
-          "(date_created >= ? AND date_created <= ?) OR " +
-          "(date_completed >= ? AND date_completed <= ?) OR " +
-          "(date_pending >= ? AND date_pending <= ?)"
-        );
-        const startTs = Jdbc.newTimestamp(startDateTime.getTime());
-        const endTs = Jdbc.newTimestamp(endDateTime.getTime());
-        taskActStmt.setTimestamp(1, startTs);
-        taskActStmt.setTimestamp(2, endTs);
-        taskActStmt.setTimestamp(3, startTs);
-        taskActStmt.setTimestamp(4, endTs);
-        taskActStmt.setTimestamp(5, startTs);
-        taskActStmt.setTimestamp(6, endTs);
+    // 3. Fallback: Search anywhere in Drive
+    if (!tasksSpreadsheet) {
+      const files = DriveApp.getFilesByName(TASKS_CALENDAR_SPREADSHEET_NAME);
+      if (files.hasNext()) {
+        tasksSpreadsheet = SpreadsheetApp.open(files.next());
+      }
+    }
 
-        const rsTaskAct = taskActStmt.executeQuery();
-        while (rsTaskAct.next()) {
-          const tText = rsTaskAct.getString("text");
-          const tNote = rsTaskAct.getString("completion_note");
-          const dc = rsTaskAct.getTimestamp("date_created");
-          const dcomp = rsTaskAct.getTimestamp("date_completed");
-          const dp = rsTaskAct.getTimestamp("date_pending");
+    if (tasksSpreadsheet) {
+      Logger.log(`Loading tasks and calendar events from sheet "${tasksSpreadsheet.getName()}"...`);
 
-          if (dc) {
-            const d = new Date(dc.getTime());
-            if (d >= startDateTime && d <= endDateTime) {
-              events.push({
-                timestamp: d,
+      // Helper to locate column index by candidate names
+      const findColIdx = (headerRow, names) => {
+        for (let i = 0; i < names.length; i++) {
+          const idx = headerRow.indexOf(names[i].toLowerCase());
+          if (idx !== -1) return idx;
+        }
+        return -1;
+      };
+
+      // A. Load Tasks from "Tasks" tab
+      const allSheets = tasksSpreadsheet.getSheets();
+      const tasksSheet = tasksSpreadsheet.getSheetByName(TASKS_SHEET_TAB_NAME) ||
+                         allSheets.find(s => s.getName().trim().toLowerCase() === TASKS_SHEET_TAB_NAME.toLowerCase());
+      if (tasksSheet) {
+        const taskData = tasksSheet.getDataRange().getValues();
+        if (taskData && taskData.length > 1) {
+          const headerRow = taskData[0].map(h => String(h || '').trim().toLowerCase());
+
+          const idIdx = findColIdx(headerRow, ['id']);
+          const textIdx = findColIdx(headerRow, ['text', 'title', 'task']);
+          const compNoteIdx = findColIdx(headerRow, ['completion_note', 'comp_note']);
+          const noteIdx = findColIdx(headerRow, ['note']);
+          const dcIdx = findColIdx(headerRow, ['date_created', 'created_at']);
+          const dcompIdx = findColIdx(headerRow, ['date_completed', 'completed_at']);
+          const dpIdx = findColIdx(headerRow, ['date_pending']);
+
+          for (let r = 1; r < taskData.length; r++) {
+            const row = taskData[r];
+            const tId = idIdx !== -1 ? String(row[idIdx] || '') : '';
+            const tText = textIdx !== -1 ? String(row[textIdx] || '').trim() : '';
+            const tNote = compNoteIdx !== -1 && row[compNoteIdx] ? String(row[compNoteIdx]) : (noteIdx !== -1 ? String(row[noteIdx] || '') : '');
+
+            if (!tText && !tId) continue;
+
+            // 1. Populate allTasks for Step 5 deep scan
+            allTasks.push({
+              id: tId,
+              text: tText
+            });
+
+            // 2. Check activity within date range
+            const dc = dcIdx !== -1 ? parseSheetDate(row[dcIdx]) : null;
+            const dcomp = dcompIdx !== -1 ? parseSheetDate(row[dcompIdx]) : null;
+            const dp = dpIdx !== -1 ? parseSheetDate(row[dpIdx]) : null;
+
+            if (dc && dc >= startDateTime && dc <= endDateTime) {
+              tasksCreated.push({
+                timestamp: dc,
+                title: tText,
+                text: tText
+              });
+              chronologicalEvents.push({
+                timestamp: dc,
                 text: `Task Created: ${tText}`
               });
             }
-          }
-          if (dcomp) {
-            const d = new Date(dcomp.getTime());
-            if (d >= startDateTime && d <= endDateTime) {
-              const noteSuffix = tNote ? ` - Note: ${tNote.trim()}` : "";
-              events.push({
-                timestamp: d,
+            if (dcomp && dcomp >= startDateTime && dcomp <= endDateTime) {
+              const noteSuffix = tNote.trim() ? ` - Note: ${tNote.trim()}` : '';
+              tasksCompleted.push({
+                timestamp: dcomp,
+                title: tText,
+                note: tNote.trim(),
+                text: `${tText}${noteSuffix}`
+              });
+              chronologicalEvents.push({
+                timestamp: dcomp,
                 text: `Task Completed: ${tText}${noteSuffix}`
               });
             }
-          }
-          if (dp) {
-            const d = new Date(dp.getTime());
-            if (d >= startDateTime && d <= endDateTime) {
-              events.push({
-                timestamp: d,
+            if (dp && dp >= startDateTime && dp <= endDateTime) {
+              chronologicalEvents.push({
+                timestamp: dp,
                 text: `Task Moved to Pending: ${tText}`
               });
             }
           }
+          Logger.log(`Loaded ${allTasks.length} tasks from "${tasksSheet.getName()}" tab.`);
         }
-        rsTaskAct.close();
-        taskActStmt.close();
+      } else {
+        Logger.log(`Tab "${TASKS_SHEET_TAB_NAME}" not found in tasks spreadsheet.`);
+      }
 
-        // 3. Calendar events with activity in date range
-        const calActStmt = conn.prepareStatement(
-          "SELECT title, created_at, completed_at, cancelled_at, completion_note FROM calendar_events WHERE " +
-          "(created_at >= ? AND created_at <= ?) OR " +
-          "(completed_at >= ? AND completed_at <= ?) OR " +
-          "(cancelled_at >= ? AND cancelled_at <= ?)"
-        );
-        calActStmt.setTimestamp(1, startTs);
-        calActStmt.setTimestamp(2, endTs);
-        calActStmt.setTimestamp(3, startTs);
-        calActStmt.setTimestamp(4, endTs);
-        calActStmt.setTimestamp(5, startTs);
-        calActStmt.setTimestamp(6, endTs);
+      // B. Load Calendar Events from "Calendar Events" tab
+      const calSheet = tasksSpreadsheet.getSheetByName(CALENDAR_EVENTS_SHEET_TAB_NAME) ||
+                       allSheets.find(s => s.getName().trim().toLowerCase() === CALENDAR_EVENTS_SHEET_TAB_NAME.toLowerCase());
+      if (calSheet) {
+        const calData = calSheet.getDataRange().getValues();
+        if (calData && calData.length > 1) {
+          const headerRow = calData[0].map(h => String(h || '').trim().toLowerCase());
 
-        const rsCalAct = calActStmt.executeQuery();
-        while (rsCalAct.next()) {
-          const cTitle = rsCalAct.getString("title") || "Unnamed Event";
-          const cNote = rsCalAct.getString("completion_note");
-          const cCre = rsCalAct.getTimestamp("created_at");
-          const cComp = rsCalAct.getTimestamp("completed_at");
-          const cCanc = rsCalAct.getTimestamp("cancelled_at");
+          const titleIdx = findColIdx(headerRow, ['title', 'event_title', 'name']);
+          const compNoteIdx = findColIdx(headerRow, ['completion_note', 'comp_note']);
+          const noteIdx = findColIdx(headerRow, ['note']);
+          const cCreIdx = findColIdx(headerRow, ['created_at', 'date_created']);
+          const cCompIdx = findColIdx(headerRow, ['completed_at', 'date_completed']);
+          const cCancIdx = findColIdx(headerRow, ['cancelled_at', 'date_cancelled']);
 
-          if (cCre) {
-            const d = new Date(cCre.getTime());
-            if (d >= startDateTime && d <= endDateTime) {
-              events.push({
-                timestamp: d,
+          let calCount = 0;
+          for (let r = 1; r < calData.length; r++) {
+            const row = calData[r];
+            const cTitle = titleIdx !== -1 ? String(row[titleIdx] || '').trim() : 'Unnamed Event';
+            const cNote = compNoteIdx !== -1 && row[compNoteIdx] ? String(row[compNoteIdx]) : (noteIdx !== -1 ? String(row[noteIdx] || '') : '');
+
+            const cCre = cCreIdx !== -1 ? parseSheetDate(row[cCreIdx]) : null;
+            const cComp = cCompIdx !== -1 ? parseSheetDate(row[cCompIdx]) : null;
+            const cCanc = cCancIdx !== -1 ? parseSheetDate(row[cCancIdx]) : null;
+
+            if (cCre && cCre >= startDateTime && cCre <= endDateTime) {
+              eventsCreated.push({
+                timestamp: cCre,
+                title: cTitle,
+                text: cTitle
+              });
+              chronologicalEvents.push({
+                timestamp: cCre,
                 text: `Calendar Event Created: ${cTitle}`
               });
+              calCount++;
             }
-          }
-          if (cComp) {
-            const d = new Date(cComp.getTime());
-            if (d >= startDateTime && d <= endDateTime) {
-              const noteSuffix = cNote ? ` - Note: ${cNote.trim()}` : "";
-              events.push({
-                timestamp: d,
+            if (cComp && cComp >= startDateTime && cComp <= endDateTime) {
+              const noteSuffix = cNote.trim() ? ` - Note: ${cNote.trim()}` : '';
+              eventsCompleted.push({
+                timestamp: cComp,
+                title: cTitle,
+                note: cNote.trim(),
+                text: `${cTitle}${noteSuffix}`
+              });
+              chronologicalEvents.push({
+                timestamp: cComp,
                 text: `Calendar Event Completed: ${cTitle}${noteSuffix}`
               });
+              calCount++;
             }
-          }
-          if (cCanc) {
-            const d = new Date(cCanc.getTime());
-            if (d >= startDateTime && d <= endDateTime) {
-              events.push({
-                timestamp: d,
+            if (cCanc && cCanc >= startDateTime && cCanc <= endDateTime) {
+              chronologicalEvents.push({
+                timestamp: cCanc,
                 text: `Calendar Event Cancelled: ${cTitle}`
               });
+              calCount++;
+            }
+          }
+          Logger.log(`Loaded ${calCount} calendar events from "${calSheet.getName()}" tab.`);
+        }
+      }
+
+      // C. Optional check: Completed Tasks and Events archive sheet
+      try {
+        let archiveSS = null;
+        const sysFolderIter = DriveApp.getFoldersByName(PREFERENCE_SUB_FOLDER_NAME);
+        if (sysFolderIter.hasNext()) {
+          const sysFolder = sysFolderIter.next();
+          const arcFiles = sysFolder.getFilesByName(COMPLETED_ARCHIVE_SPREADSHEET_NAME);
+          if (arcFiles.hasNext()) {
+            archiveSS = SpreadsheetApp.open(arcFiles.next());
+          }
+        }
+        if (!archiveSS) {
+          const arcFiles = DriveApp.getFilesByName(COMPLETED_ARCHIVE_SPREADSHEET_NAME);
+          if (arcFiles.hasNext()) {
+            archiveSS = SpreadsheetApp.open(arcFiles.next());
+          }
+        }
+
+        if (archiveSS) {
+          const arcSheet = archiveSS.getSheets()[0];
+          if (arcSheet) {
+            const arcData = arcSheet.getDataRange().getValues();
+            if (arcData && arcData.length > 1) {
+              for (let r = 1; r < arcData.length; r++) {
+                const row = arcData[r];
+                const dt = parseSheetDate(row[0]);
+                if (dt && dt >= startDateTime && dt <= endDateTime) {
+                  const itemType = String(row[1] || '').trim().toLowerCase();
+                  const itemTitle = String(row[3] || '').trim();
+                  const itemNote = String(row[4] || '').trim();
+                  const noteSuffix = itemNote ? ` - Note: ${itemNote}` : '';
+
+                  if (itemType === 'calendar' || itemType === 'calendar event' || itemType === 'event') {
+                    const alreadyRecorded = eventsCompleted.some(e => e.title === itemTitle);
+                    if (!alreadyRecorded) {
+                      eventsCompleted.push({
+                        timestamp: dt,
+                        title: itemTitle,
+                        note: itemNote,
+                        text: `${itemTitle}${noteSuffix}`
+                      });
+                      chronologicalEvents.push({
+                        timestamp: dt,
+                        text: `Calendar Event Completed (Archived): ${itemTitle}${noteSuffix}`
+                      });
+                    }
+                  } else {
+                    const alreadyRecorded = tasksCompleted.some(t => t.title === itemTitle);
+                    if (!alreadyRecorded) {
+                      tasksCompleted.push({
+                        timestamp: dt,
+                        title: itemTitle,
+                        note: itemNote,
+                        text: `${itemTitle}${noteSuffix}`
+                      });
+                      chronologicalEvents.push({
+                        timestamp: dt,
+                        text: `Task Completed (Archived): ${itemTitle}${noteSuffix}`
+                      });
+                    }
+                  }
+                }
+              }
             }
           }
         }
-        rsCalAct.close();
-        calActStmt.close();
-
-        loadedFromSql = true;
-        Logger.log("Successfully loaded tasks and calendar events from SQL database.");
-      } finally {
-        conn.close();
+      } catch (arcEx) {
+        Logger.log(`Notice: Archive spreadsheet check skipped or error: ${arcEx.toString()}`);
       }
+
     } else {
-      Logger.log("Database configuration could not be found (DATABASE_URL in Script Properties, db.env, or preferences).");
+      Logger.log(`Tasks spreadsheet "${TASKS_CALENDAR_SPREADSHEET_NAME}" was not found.`);
     }
-  } catch (sqlEx) {
-    Logger.log(`SQL Database query failed (${sqlEx.toString()}). Tasks and calendar events could not be loaded.`);
+  } catch (sheetEx) {
+    Logger.log(`Failed loading tasks from Google Sheets: ${sheetEx.toString()}`);
   }
+
+  // --- Contacts Documents Scanning (Contacts / Contracts Folder) ---
+  const contactFolderIds = new Set();
+  const contactFolders = [];
+  const candidateContactFolderNames = [
+    preferences.contractsFolder,
+    preferences.contactsFolder,
+    "Contracts",
+    "contracts",
+    "Contacts",
+    "contacts"
+  ].filter(Boolean);
+
+  // 1. Search inside notesFolder
+  candidateContactFolderNames.forEach(folderName => {
+    try {
+      const subFolders = notesFolder.getFoldersByName(folderName);
+      while (subFolders.hasNext()) {
+        const f = subFolders.next();
+        if (!contactFolderIds.has(f.getId())) {
+          contactFolderIds.add(f.getId());
+          contactFolders.push(f);
+        }
+      }
+    } catch (e) {
+      Logger.log(`Error checking notesFolder subfolder "${folderName}": ${e.toString()}`);
+    }
+  });
+
+  // 2. Search DriveApp hierarchy
+  candidateContactFolderNames.forEach(folderName => {
+    try {
+      const driveFolders = DriveApp.getFoldersByName(folderName);
+      while (driveFolders.hasNext()) {
+        const f = driveFolders.next();
+        if (!contactFolderIds.has(f.getId())) {
+          contactFolderIds.add(f.getId());
+          contactFolders.push(f);
+        }
+      }
+    } catch (e) {
+      Logger.log(`Error searching Drive for folder "${folderName}": ${e.toString()}`);
+    }
+  });
+
+  // 3. Scan files inside the found contact folder(s)
+  contactFolders.forEach(folder => {
+    try {
+      const files = folder.getFiles();
+      while (files.hasNext()) {
+        const file = files.next();
+        const createdDate = file.getDateCreated();
+        const updatedDate = file.getLastUpdated();
+
+        const isCreatedToday = (createdDate >= startDateTime && createdDate <= endDateTime);
+        const isUpdatedToday = (updatedDate >= startDateTime && updatedDate <= endDateTime);
+
+        if (isCreatedToday || isUpdatedToday) {
+          const docName = file.getName();
+          const alreadyExists = contactsCreatedOrUpdated.some(c => c.id === file.getId());
+          if (!alreadyExists) {
+            const timestamp = isUpdatedToday ? updatedDate : createdDate;
+            let actionLabel = "Updated";
+            if (isCreatedToday && !isUpdatedToday) {
+              actionLabel = "Created";
+            } else if (isCreatedToday && isUpdatedToday) {
+              const diffMs = Math.abs(updatedDate.getTime() - createdDate.getTime());
+              actionLabel = diffMs < 60000 ? "Created" : "Created/Updated";
+            }
+
+            contactsCreatedOrUpdated.push({
+              id: file.getId(),
+              timestamp: timestamp,
+              name: docName,
+              action: actionLabel,
+              url: file.getUrl(),
+              text: `${docName} (${actionLabel})`
+            });
+
+            chronologicalEvents.push({
+              timestamp: timestamp,
+              text: `Contact Doc ${actionLabel}: ${docName}`,
+              url: file.getUrl()
+            });
+          }
+        }
+      }
+    } catch (e) {
+      Logger.log(`Error scanning contact folder "${folder.getName()}": ${e.toString()}`);
+    }
+  });
+
+  Logger.log(`Loaded ${contactsCreatedOrUpdated.length} contact document(s) created or updated today.`);
   
   // --- STEP 1: Document & Spreadsheet Creations ---
   const creationsQuery = `modifiedDate >= '${yyyy}-${mm}-${dd}T00:00:00' and trashed = false`;
@@ -1322,16 +1647,22 @@ function createDailyReport(startDateTime, endDateTime) {
     // Exclusions
     if (systemNames.indexOf(fileName) !== -1 || fileName === PREFERENCE_FILE_NAME || fileName === PREFERENCE_SPREADSHEET_NAME) continue;
     
-    // Exclude if in log folder
+    // Exclude if in log folder or contact/contract folder
     const parents = file.getParents();
     let inLogFolder = false;
+    let inContactFolder = false;
     while (parents.hasNext()) {
-      if (parents.next().getId() === logFolderId) {
+      const pId = parents.next().getId();
+      if (pId === logFolderId) {
         inLogFolder = true;
         break;
       }
+      if (contactFolderIds.has(pId)) {
+        inContactFolder = true;
+        break;
+      }
     }
-    if (inLogFolder) continue;
+    if (inLogFolder || inContactFolder) continue;
     
     let typeLabel = "File";
     const mime = file.getMimeType();
@@ -1341,8 +1672,16 @@ function createDailyReport(startDateTime, endDateTime) {
       typeLabel = "Spreadsheet";
     }
     
-    events.push({
-      timestamp: file.getDateCreated(),
+    filesCreated.push({
+      timestamp: createdDate,
+      name: fileName,
+      typeLabel: typeLabel,
+      url: file.getUrl(),
+      text: `${typeLabel}: ${fileName}`
+    });
+
+    chronologicalEvents.push({
+      timestamp: createdDate,
       text: `${typeLabel} Created: ${fileName}`,
       url: file.getUrl()
     });
@@ -1368,7 +1707,7 @@ function createDailyReport(startDateTime, endDateTime) {
               if (parsed) {
                 const ts = parsed.timestamp;
                 if (ts >= startDateTime && ts <= endDateTime) {
-                  events.push({
+                  chronologicalEvents.push({
                     timestamp: ts,
                     text: `Log:${category} - ${parsed.text}`
                   });
@@ -1401,16 +1740,22 @@ function createDailyReport(startDateTime, endDateTime) {
       continue;
     }
     
-    // Skip if in log folder
+    // Skip if in log folder or contact/contract folder
     const parents = docFile.getParents();
     let inLogFolder = false;
+    let inContactFolder = false;
     while (parents.hasNext()) {
-      if (parents.next().getId() === logFolderId) {
+      const pId = parents.next().getId();
+      if (pId === logFolderId) {
         inLogFolder = true;
         break;
       }
+      if (contactFolderIds.has(pId)) {
+        inContactFolder = true;
+        break;
+      }
     }
-    if (inLogFolder) continue;
+    if (inLogFolder || inContactFolder) continue;
     
     try {
       const doc = DocumentApp.openById(docFile.getId());
@@ -1420,7 +1765,7 @@ function createDailyReport(startDateTime, endDateTime) {
       if (docName.startsWith("Location-")) {
         const lines = docText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
         const addressInfo = lines.join(", ");
-        events.push({
+        chronologicalEvents.push({
           timestamp: docFile.getLastUpdated(),
           text: `Location Update (${docName}): ${addressInfo}`,
           url: docFile.getUrl()
@@ -1430,7 +1775,7 @@ function createDailyReport(startDateTime, endDateTime) {
       // 2. Linked Notes
       allTasks.forEach(task => {
         if (task.text && (docText.includes(task.id) || docText.includes(task.text))) {
-          events.push({
+          chronologicalEvents.push({
             timestamp: docFile.getLastUpdated(),
             text: `Linked Note: Document "${docName}" is associated with Task "${task.text}"`,
             url: docFile.getUrl()
@@ -1451,7 +1796,7 @@ function createDailyReport(startDateTime, endDateTime) {
         
         if (entryTime >= startDateTime && entryTime <= endDateTime) {
           const entryText = match[6].trim() || "Notes Entry";
-          events.push({
+          chronologicalEvents.push({
             timestamp: entryTime,
             text: `Doc Entry (${docName}): ${entryText}`,
             url: docFile.getUrl()
@@ -1463,8 +1808,15 @@ function createDailyReport(startDateTime, endDateTime) {
     }
   }
   
-  // Sort all events chronologically (24-hour normalized)
-  events.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  // Sort all collections chronologically (24-hour normalized)
+  const sortByTimestamp = (a, b) => a.timestamp.getTime() - b.timestamp.getTime();
+  tasksCompleted.sort(sortByTimestamp);
+  eventsCompleted.sort(sortByTimestamp);
+  filesCreated.sort(sortByTimestamp);
+  tasksCreated.sort(sortByTimestamp);
+  eventsCreated.sort(sortByTimestamp);
+  contactsCreatedOrUpdated.sort(sortByTimestamp);
+  chronologicalEvents.sort(sortByTimestamp);
   
   // --- Create Google Doc Report ---
   const doc = DocumentApp.create(docTitle);
@@ -1489,7 +1841,7 @@ function createDailyReport(startDateTime, endDateTime) {
   titleText.setBold(true);
   
   // Horizontal Rule (styled as standard divider)
-  const hr = body.appendHorizontalRule();
+  body.appendHorizontalRule();
   
   // Time and duration stats
   const endTime = new Date();
@@ -1502,53 +1854,116 @@ function createDailyReport(startDateTime, endDateTime) {
   statsText.setItalic(true);
   
   body.appendParagraph(""); // Space
-  
-  // Append all events
-  if (events.length === 0) {
-    const emptyPara = body.appendParagraph("No activity recorded today.");
-    const emptyText = emptyPara.editAsText();
-    emptyText.setForegroundColor("#000000");
-    emptyText.setFontSize(11);
-  } else {
-    events.forEach(evt => {
-      const timeStr = Utilities.formatDate(evt.timestamp, Session.getScriptTimeZone(), "HH:mm");
-      const p = body.appendParagraph("");
-      
-      // [HH:mm] in legible Green (#2E7D32)
-      const timeRun = p.appendText(`[${timeStr}] `);
-      timeRun.setForegroundColor("#2E7D32");
-      timeRun.setBold(true);
-      timeRun.setFontSize(11);
-      
-      // Description in Black (#000000)
-      const textRun = p.appendText(evt.text);
-      textRun.setForegroundColor("#000000");
-      textRun.setFontSize(11);
-      
-      // Link in legible Blue (#1976D2)
-      if (evt.url) {
-        const linkRun = p.appendText(" ");
-        const linkText = p.appendText("(Link)");
-        linkText.setLinkUrl(evt.url);
-        linkText.setForegroundColor("#1976D2");
-        linkText.setUnderline(true);
-        linkText.setFontSize(11);
-      }
-    });
-  }
+
+  // Helper to render each section consistently
+  const appendChronicleSection = (headingText, items, emptyMessage) => {
+    const headingPara = body.appendParagraph(headingText);
+    headingPara.setHeading(DocumentApp.ParagraphHeading.HEADING2);
+    const headingTextObj = headingPara.editAsText();
+    headingTextObj.setForegroundColor("#1A237E");
+    headingTextObj.setFontSize(13);
+    headingTextObj.setBold(true);
+
+    if (!items || items.length === 0) {
+      const emptyPara = body.appendParagraph(emptyMessage || "None");
+      const emptyText = emptyPara.editAsText();
+      emptyText.setForegroundColor("#757575");
+      emptyText.setFontSize(10);
+      emptyText.setItalic(true);
+    } else {
+      items.forEach(item => {
+        const p = body.appendParagraph("");
+        if (item.timestamp) {
+          const timeStr = Utilities.formatDate(item.timestamp, Session.getScriptTimeZone(), "HH:mm");
+          const timeRun = p.appendText(`[${timeStr}] `);
+          timeRun.setForegroundColor("#2E7D32");
+          timeRun.setBold(true);
+          timeRun.setFontSize(11);
+        }
+        
+        const textRun = p.appendText(item.text);
+        textRun.setForegroundColor("#000000");
+        textRun.setFontSize(11);
+        
+        if (item.url) {
+          p.appendText(" ");
+          const linkText = p.appendText("(Link)");
+          linkText.setLinkUrl(item.url);
+          linkText.setForegroundColor("#1976D2");
+          linkText.setUnderline(true);
+          linkText.setFontSize(11);
+        }
+      });
+    }
+    body.appendParagraph(""); // Space between sections
+  };
+
+  // 1. Tasks Completed
+  appendChronicleSection("Tasks Completed", tasksCompleted, "No tasks completed today.");
+
+  // 2. Events Completed
+  appendChronicleSection("Events Completed", eventsCompleted, "No events completed today.");
+
+  // 3. Files Created
+  appendChronicleSection("Files Created", filesCreated, "No files created today.");
+
+  // 4. Tasks Created
+  appendChronicleSection("Tasks Created", tasksCreated, "No tasks created today.");
+
+  // 5. Events Created
+  appendChronicleSection("Events Created", eventsCreated, "No events created today.");
+
+  // 6. Contacts created or updated today
+  appendChronicleSection("Contacts created or updated today", contactsCreatedOrUpdated, "No contacts created or updated today.");
+
+  // 7. Chronological View of All Tasks, Events, and Files
+  body.appendHorizontalRule();
+  body.appendParagraph("");
+  appendChronicleSection("Chronological View of All Tasks, Events, and Files", chronologicalEvents, "No activity recorded today.");
   
   // Footer
   body.appendParagraph("").appendHorizontalRule();
   const footerPara = body.appendParagraph("Generated by Capit");
   footerPara.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
   const footerText = footerPara.editAsText();
-  footerText.setLinkUrl("https://markstouttech.com");
+  footerText.setLinkUrl("https://markstouttech.com/Capit.html");
   footerText.setForegroundColor("#888888");
   footerText.setFontSize(10);
   footerText.setBold(true);
   
   doc.saveAndClose();
 }
+
+
+/**
+ * Daily Chronicle function (alias for createDailyReport).
+ */
+function dailyChronicle(startDateTime, endDateTime) {
+  return createDailyReport(startDateTime, endDateTime);
+}
+
+
+/**
+ * Parses a date or timestamp value from a Google Sheets cell.
+ * Handles Date objects, ISO strings, YYYY-MM-DD HH:mm:ss, and YYYY-MM-DD.
+ */
+function parseSheetDate(val) {
+  if (!val) return null;
+  if (val instanceof Date) {
+    return isNaN(val.getTime()) ? null : val;
+  }
+  if (typeof val === 'string') {
+    const s = val.trim();
+    if (!s) return null;
+    const formatted = s.includes('T') || s.includes(' ') ? s.replace(' ', 'T') : (s.length === 10 ? s + 'T00:00:00' : s);
+    const d = new Date(formatted);
+    if (!isNaN(d.getTime())) return d;
+    const d2 = new Date(s);
+    if (!isNaN(d2.getTime())) return d2;
+  }
+  return null;
+}
+
 
 /**
  * Robust datetime parser that parses rows of log spreadsheets.
@@ -1583,6 +1998,7 @@ function parseDateTimeAndText(row) {
     }
   }
 
+
   if (timestamp) {
     let bodyParts = [];
     for (let i = 0; i < row.length; i++) {
@@ -1602,6 +2018,7 @@ function parseDateTimeAndText(row) {
   return null;
 }
 
+
 /**
  * Simple trigger that runs when the spreadsheet is opened.
  * Reads preferences and shows the Notes folder in cell A4 and the Date Format in cell A5.
@@ -1613,6 +2030,7 @@ function onOpen() {
     // Set static preference metadata in A9 and A10
     sheet.getRange("A9").setValue(PREFERENCE_SPREADSHEET_NAME);
     sheet.getRange("A10").setValue(PREFERENCE_SHEET_TAB_NAME);
+
 
     const preferences = loadPreferences();
     if (preferences) {
