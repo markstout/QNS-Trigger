@@ -563,13 +563,11 @@ function triggered_convertTextNotesToDoc() {
     return;
   }
 
-
   const targetFolder = getOrCreateFolder(DriveApp, preferences.notesFolder);
   if (!targetFolder) {
     Logger.log(`Could not find or create target notes folder. Aborting.`);
     return;
   }
-
 
   try {
     const files = targetFolder.getFilesByType('text/plain');
@@ -582,43 +580,151 @@ function triggered_convertTextNotesToDoc() {
         const fileUrl = file.getUrl();
         const fileDate = file.getDateCreated();
         
-        const docTitle = `${fileName.replace(/\.txt$/i, '')} - ${Utilities.formatDate(fileDate, Session.getScriptTimeZone(), "MM/dd/YYYY HH:mm")}`;
-        const newDoc = DocumentApp.create(docTitle);
-        const docBody = newDoc.getBody();
+        // Check if the note file contains ONLY a URL
+        const urlOnly = extractSingleUrlIfOnlyUrl(fileContent);
 
+        if (urlOnly) {
+          Logger.log(`File "${fileName}" contains only a URL: ${urlOnly}. Fetching webpage metadata and recreating top portion...`);
+          const pageMeta = recoverWebpageMetadata(urlOnly, fileDate);
+          const displayTitle = pageMeta.title || fileName.replace(/\.txt$/i, '');
+          const docTitle = `${displayTitle} - ${Utilities.formatDate(pageMeta.recoveredDate, Session.getScriptTimeZone(), "MM/dd/YYYY HH:mm")}`;
+          
+          const newDoc = DocumentApp.create(docTitle);
+          const docBody = newDoc.getBody();
 
-        addStandardDocHeader(newDoc, fileDate, fileName, fileUrl, "File Conversion");
-        const fullContentHeading = docBody.appendParagraph("--- Full File Content ---");
-        
-        const headingStyle = {};
-        headingStyle[DocumentApp.Attribute.FONT_SIZE] = 14;
-        headingStyle[DocumentApp.Attribute.BOLD] = true;
-        fullContentHeading.setAttributes(headingStyle);
+          // PAGE 1: Title, URL (clickable), and Date/time recovered for the webpage
+          const titlePara = docBody.appendParagraph("Title: " + displayTitle);
+          const titleStyle = {};
+          titleStyle[DocumentApp.Attribute.FONT_SIZE] = 18;
+          titleStyle[DocumentApp.Attribute.BOLD] = true;
+          titleStyle[DocumentApp.Attribute.FONT_FAMILY] = 'Arial';
+          titlePara.setAttributes(titleStyle);
 
+          docBody.appendParagraph("");
 
-        const contentParagraph = docBody.appendParagraph(fileContent);
+          // Standard article body text style (same size type for metadata and article text)
+          const articleTextStyle = {};
+          articleTextStyle[DocumentApp.Attribute.FONT_SIZE] = 11;
+          articleTextStyle[DocumentApp.Attribute.BOLD] = false;
+          articleTextStyle[DocumentApp.Attribute.FONT_FAMILY] = 'Arial';
 
+          const urlPara = docBody.appendParagraph("URL: ");
+          urlPara.setAttributes(articleTextStyle);
+          urlPara.setHeading(DocumentApp.ParagraphHeading.NORMAL_TEXT);
+          const urlTextElement = urlPara.appendText(urlOnly);
+          urlTextElement.setAttributes(articleTextStyle);
+          urlTextElement.setLinkUrl(urlOnly);
+          urlTextElement.setUnderline(true);
 
-        const textElement = contentParagraph.editAsText();
-        const urlRegex = /(https?:\/\/[^\s]+)/g;
-        const match = urlRegex.exec(fileContent);
+          const formattedDate = Utilities.formatDate(pageMeta.recoveredDate, Session.getScriptTimeZone(), "MM/dd/yyyy HH:mm:ss");
+          const datePara = docBody.appendParagraph(`Date/Time: ${formattedDate} (${pageMeta.dateSource})`);
+          datePara.setAttributes(articleTextStyle);
+          datePara.setHeading(DocumentApp.ParagraphHeading.NORMAL_TEXT);
 
+          const sourcePara = docBody.appendParagraph(`Source Note: ${fileName}`);
+          sourcePara.setAttributes(articleTextStyle);
+          sourcePara.setHeading(DocumentApp.ParagraphHeading.NORMAL_TEXT);
+          docBody.appendParagraph("").appendHorizontalRule();
 
-        if (match && match[0]) {
-          const linkUrl = match[0];
-          textElement.setLinkUrl(0, textElement.getText().length - 1, linkUrl);
+          // Complete the first page
+          docBody.appendPageBreak();
+
+          // PAGE 2: Duplicate the first page (top portion) of the webpage
+          const contentHeading = docBody.appendParagraph("--- Webpage Content ---");
+          const headingStyle = {};
+          headingStyle[DocumentApp.Attribute.FONT_SIZE] = 14;
+          headingStyle[DocumentApp.Attribute.BOLD] = true;
+          contentHeading.setAttributes(headingStyle);
+
+          if (pageMeta.fetchSuccess) {
+            const topPortion = extractWebpageTopPortion(pageMeta.htmlContent);
+            if (topPortion.paragraphs.length > 0) {
+              for (let pIdx = 0; pIdx < topPortion.paragraphs.length; pIdx++) {
+                const p = topPortion.paragraphs[pIdx];
+                if (p.startsWith('[[HEADING1]]') && p.includes('[[/HEADING1]]')) {
+                  const hText = p.replace('[[HEADING1]]', '').replace('[[/HEADING1]]', '').trim();
+                  if (hText) {
+                    const hPara = docBody.appendParagraph(hText);
+                    hPara.setHeading(DocumentApp.ParagraphHeading.HEADING1);
+                  }
+                } else if (p.startsWith('[[HEADING2]]') && p.includes('[[/HEADING2]]')) {
+                  const hText = p.replace('[[HEADING2]]', '').replace('[[/HEADING2]]', '').trim();
+                  if (hText) {
+                    const hPara = docBody.appendParagraph(hText);
+                    hPara.setHeading(DocumentApp.ParagraphHeading.HEADING2);
+                  }
+                } else {
+                  const cleanP = p.replace(/\[\[\/?HEADING[12]\]\]/g, '').trim();
+                  if (cleanP) {
+                    const para = docBody.appendParagraph(cleanP);
+                    para.setAttributes(articleTextStyle);
+                    para.setHeading(DocumentApp.ParagraphHeading.NORMAL_TEXT);
+                    // Make embedded URLs clickable
+                    const urlRegex = /https?:\/\/[^\s)\]>"']+/g;
+                    let match;
+                    const paraText = para.editAsText();
+                    while ((match = urlRegex.exec(cleanP)) !== null) {
+                      paraText.setLinkUrl(match.index, match.index + match[0].length - 1, match[0]);
+                    }
+                  }
+                }
+              }
+              if (topPortion.isTruncated) {
+                const truncPara = docBody.appendParagraph("\n[Note: Webpage content was truncated to recreate only the top portion]");
+                truncPara.setAttributes(articleTextStyle);
+                truncPara.setItalic(true);
+              }
+            } else {
+              const emptyPara = docBody.appendParagraph("[No readable text content found on webpage]");
+              emptyPara.setAttributes(articleTextStyle);
+            }
+          } else {
+            const failPara = docBody.appendParagraph(`[Could not retrieve webpage content from ${urlOnly}]`);
+            failPara.setAttributes(articleTextStyle);
+          }
+
+          addStandardDocFooter(newDoc);
+          const newDocFile = DriveApp.getFileById(newDoc.getId());
+          targetFolder.addFile(newDocFile);
+          DriveApp.getRootFolder().removeFile(newDocFile);
+          Logger.log(`Created Google Doc from URL note "${fileName}" at: ${newDoc.getUrl()}`);
+
+          file.setTrashed(true);
+          Logger.log(`Trashed original file: "${fileName}"`);
+        } else {
+          // Standard text note conversion
+          const docTitle = `${fileName.replace(/\.txt$/i, '')} - ${Utilities.formatDate(fileDate, Session.getScriptTimeZone(), "MM/dd/YYYY HH:mm")}`;
+          const newDoc = DocumentApp.create(docTitle);
+          const docBody = newDoc.getBody();
+
+          addStandardDocHeader(newDoc, fileDate, fileName, fileUrl, "File Conversion");
+          const fullContentHeading = docBody.appendParagraph("--- Full File Content ---");
+          
+          const headingStyle = {};
+          headingStyle[DocumentApp.Attribute.FONT_SIZE] = 14;
+          headingStyle[DocumentApp.Attribute.BOLD] = true;
+          fullContentHeading.setAttributes(headingStyle);
+
+          const contentParagraph = docBody.appendParagraph(fileContent);
+
+          const textElement = contentParagraph.editAsText();
+          const urlRegex = /(https?:\/\/[^\s]+)/g;
+          const match = urlRegex.exec(fileContent);
+
+          if (match && match[0]) {
+            const linkUrl = match[0];
+            textElement.setLinkUrl(0, textElement.getText().length - 1, linkUrl);
+          }
+
+          addStandardDocFooter(newDoc);
+          const newDocFile = DriveApp.getFileById(newDoc.getId());
+          targetFolder.addFile(newDocFile);
+          DriveApp.getRootFolder().removeFile(newDocFile);
+          Logger.log(`Created Google Doc from "${fileName}" at: ${newDoc.getUrl()}`);
+          
+          file.setTrashed(true);
+          Logger.log(`Trashed original file: "${fileName}"`);
         }
-
-
-        addStandardDocFooter(newDoc);
-        const newDocFile = DriveApp.getFileById(newDoc.getId());
-        targetFolder.addFile(newDocFile);
-        DriveApp.getRootFolder().removeFile(newDocFile);
-        Logger.log(`Created Google Doc from "${fileName}" at: ${newDoc.getUrl()}`);
-        
-        file.setTrashed(true);
-        Logger.log(`Trashed original file: "${fileName}"`);
-
 
         filesProcessed++;
       } catch (fileProcessError) {
@@ -629,6 +735,242 @@ function triggered_convertTextNotesToDoc() {
   } catch (e) {
     Logger.log(`An error occurred during notes folder file processing: ${e.toString()}`);
   }
+}
+
+/**
+ * Helper to decode HTML entities in text strings.
+ */
+function decodeHtmlEntities(str) {
+  if (!str) return '';
+  return str
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, function(match, dec) {
+      try {
+        return String.fromCharCode(parseInt(dec, 10));
+      } catch (e) {
+        return match;
+      }
+    })
+    .replace(/&#x([0-9a-fA-F]+);/g, function(match, hex) {
+      try {
+        return String.fromCharCode(parseInt(hex, 16));
+      } catch (e) {
+        return match;
+      }
+    });
+}
+
+/**
+ * Checks if a string contains ONLY a URL (ignoring whitespace and enclosing quotes/brackets).
+ * Returns the cleaned URL string if matched, or null otherwise.
+ */
+function extractSingleUrlIfOnlyUrl(text) {
+  if (!text) return null;
+  const trimmed = text.trim();
+  const cleaned = trimmed.replace(/^["'<](https?:\/\/[^\s"'>]+)["'>]$/i, '$1').trim();
+  const urlRegex = /^https?:\/\/[^\s]+$/i;
+  if (urlRegex.test(cleaned)) {
+    return cleaned;
+  }
+  return null;
+}
+
+/**
+ * Recovers webpage metadata (Title, Date/Time, HTML content) from a URL.
+ */
+function recoverWebpageMetadata(url, fallbackDate) {
+  let title = "";
+  let recoveredDate = null;
+  let dateSource = "";
+  let htmlContent = "";
+  let fetchSuccess = false;
+
+  try {
+    const response = UrlFetchApp.fetch(url, {
+      muteHttpExceptions: true,
+      followRedirects: true,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    });
+
+    const statusCode = response.getResponseCode();
+    if (statusCode >= 200 && statusCode < 400) {
+      fetchSuccess = true;
+      htmlContent = response.getContentText();
+
+      // 1. Recover Page Title
+      const titleMatch = htmlContent.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+      if (titleMatch && titleMatch[1]) {
+        title = decodeHtmlEntities(titleMatch[1].replace(/\s+/g, ' ').trim());
+      }
+      if (!title) {
+        const ogTitleMatch = htmlContent.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']*)["']/i) ||
+                             htmlContent.match(/<meta[^>]*content=["']([^"']*)["'][^>]*property=["']og:title["']/i);
+        if (ogTitleMatch && ogTitleMatch[1]) {
+          title = decodeHtmlEntities(ogTitleMatch[1].replace(/\s+/g, ' ').trim());
+        }
+      }
+
+      // 2. Recover Date/Time
+      const headers = response.getHeaders();
+      const getHeaderVal = function(name) {
+        const lower = name.toLowerCase();
+        for (const k in headers) {
+          if (k.toLowerCase() === lower) return headers[k];
+        }
+        return null;
+      };
+
+      // Check HTTP Last-Modified header
+      const lastModified = getHeaderVal('Last-Modified');
+      if (lastModified) {
+        const d = new Date(lastModified);
+        if (!isNaN(d.getTime())) {
+          recoveredDate = d;
+          dateSource = "Last-Modified header";
+        }
+      }
+
+      // Check HTML meta / time tags
+      if (!recoveredDate) {
+        const metaDatePatterns = [
+          { pattern: /<meta[^>]*property=["']article:published_time["'][^>]*content=["']([^"']+)["']/i, name: "article:published_time" },
+          { pattern: /<meta[^>]*content=["']([^"']+)["'][^>]*property=["']article:published_time["']/i, name: "article:published_time" },
+          { pattern: /<meta[^>]*property=["']article:modified_time["'][^>]*content=["']([^"']+)["']/i, name: "article:modified_time" },
+          { pattern: /<meta[^>]*content=["']([^"']+)["'][^>]*property=["']article:modified_time["']/i, name: "article:modified_time" },
+          { pattern: /<meta[^>]*name=["']pubdate["'][^>]*content=["']([^"']+)["']/i, name: "meta pubdate" },
+          { pattern: /<meta[^>]*name=["']publishdate["'][^>]*content=["']([^"']+)["']/i, name: "meta publishdate" },
+          { pattern: /<meta[^>]*name=["']date["'][^>]*content=["']([^"']+)["']/i, name: "meta date" },
+          { pattern: /<meta[^>]*name=["']last-modified["'][^>]*content=["']([^"']+)["']/i, name: "meta last-modified" },
+          { pattern: /<meta[^>]*property=["']og:updated_time["'][^>]*content=["']([^"']+)["']/i, name: "og:updated_time" },
+          { pattern: /<time[^>]*datetime=["']([^"']+)["']/i, name: "time datetime" }
+        ];
+
+        for (let i = 0; i < metaDatePatterns.length; i++) {
+          const item = metaDatePatterns[i];
+          const m = htmlContent.match(item.pattern);
+          if (m && m[1]) {
+            const d = new Date(m[1].trim());
+            if (!isNaN(d.getTime())) {
+              recoveredDate = d;
+              dateSource = item.name;
+              break;
+            }
+          }
+        }
+      }
+
+      // Fallback to HTTP Date header
+      if (!recoveredDate) {
+        const dateHeader = getHeaderVal('Date');
+        if (dateHeader) {
+          const d = new Date(dateHeader);
+          if (!isNaN(d.getTime())) {
+            recoveredDate = d;
+            dateSource = "HTTP Date header";
+          }
+        }
+      }
+    } else {
+      Logger.log(`UrlFetchApp returned status code ${statusCode} for ${url}`);
+    }
+  } catch (e) {
+    Logger.log(`Error recovering webpage metadata from ${url}: ${e.toString()}`);
+  }
+
+  if (!recoveredDate) {
+    recoveredDate = fallbackDate || new Date();
+    dateSource = fallbackDate ? "Note file creation date" : "Current date/time";
+  }
+
+  return {
+    title: title,
+    recoveredDate: recoveredDate,
+    dateSource: dateSource,
+    htmlContent: htmlContent,
+    fetchSuccess: fetchSuccess
+  };
+}
+
+/**
+ * Extracts and recreates the top portion of a webpage's content from HTML.
+ * Truncates if the home page is very long.
+ */
+function extractWebpageTopPortion(htmlContent, maxChars, maxParagraphs) {
+  maxChars = maxChars || 4000;
+  maxParagraphs = maxParagraphs || 25;
+
+  if (!htmlContent) return { paragraphs: [], isTruncated: false };
+
+  let bodyHtml = htmlContent;
+  const bodyMatch = htmlContent.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  if (bodyMatch && bodyMatch[1]) {
+    bodyHtml = bodyMatch[1];
+  }
+
+  // Remove scripts, styles, noscript, svg, iframes, nav, and comments
+  bodyHtml = bodyHtml.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+  bodyHtml = bodyHtml.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
+  bodyHtml = bodyHtml.replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, '');
+  bodyHtml = bodyHtml.replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, '');
+  bodyHtml = bodyHtml.replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '');
+  bodyHtml = bodyHtml.replace(/<nav\b[^<]*(?:(?!<\/nav>)<[^<]*)*<\/nav>/gi, '');
+  bodyHtml = bodyHtml.replace(/<!--[\s\S]*?-->/g, '');
+
+  // Tag headings and list items for structure
+  bodyHtml = bodyHtml.replace(/<(h[1-3])[^>]*>([\s\S]*?)<\/\1>/gi, '\n\n[[HEADING1]]$2[[/HEADING1]]\n\n');
+  bodyHtml = bodyHtml.replace(/<(h[4-6])[^>]*>([\s\S]*?)<\/\1>/gi, '\n\n[[HEADING2]]$2[[/HEADING2]]\n\n');
+  bodyHtml = bodyHtml.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '\n• $1\n');
+  bodyHtml = bodyHtml.replace(/<br\s*\/?>/gi, '\n');
+  bodyHtml = bodyHtml.replace(/<\/(p|div|section|article|blockquote|tr|header|footer)>/gi, '\n\n');
+
+  // Strip remaining HTML tags and decode entities
+  let plain = bodyHtml.replace(/<[^>]+>/g, '');
+  plain = decodeHtmlEntities(plain);
+
+  const rawParagraphs = plain.split(/\n\s*\n/);
+  const result = [];
+  let totalChars = 0;
+  let isTruncated = false;
+
+  for (let i = 0; i < rawParagraphs.length; i++) {
+    const trimmed = rawParagraphs[i].replace(/[ \t]+/g, ' ').trim();
+    if (!trimmed) continue;
+
+    if (totalChars >= maxChars || result.length >= maxParagraphs) {
+      isTruncated = true;
+      break;
+    }
+
+    let pText = trimmed;
+    if (totalChars + pText.length > maxChars) {
+      pText = pText.substring(0, maxChars - totalChars) + '...';
+      isTruncated = true;
+    }
+
+    result.push(pText);
+    totalChars += pText.length;
+
+    if (isTruncated) break;
+  }
+
+  if (!isTruncated && rawParagraphs.length > result.length) {
+    for (let j = result.length; j < rawParagraphs.length; j++) {
+      if (rawParagraphs[j].replace(/[ \t]+/g, ' ').trim()) {
+        isTruncated = true;
+        break;
+      }
+    }
+  }
+
+  return { paragraphs: result, isTruncated: isTruncated };
 }
 
 
