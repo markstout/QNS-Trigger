@@ -610,7 +610,7 @@ function triggered_convertTextNotesToDoc() {
 
           const urlPara = docBody.appendParagraph("URL: ");
           urlPara.setAttributes(articleTextStyle);
-          urlPara.setHeading(DocumentApp.ParagraphHeading.NORMAL_TEXT);
+          urlPara.setHeading(DocumentApp.ParagraphHeading.NORMAL);
           const urlTextElement = urlPara.appendText(urlOnly);
           urlTextElement.setAttributes(articleTextStyle);
           urlTextElement.setLinkUrl(urlOnly);
@@ -619,11 +619,11 @@ function triggered_convertTextNotesToDoc() {
           const formattedDate = Utilities.formatDate(pageMeta.recoveredDate, Session.getScriptTimeZone(), "MM/dd/yyyy HH:mm:ss");
           const datePara = docBody.appendParagraph(`Date/Time: ${formattedDate} (${pageMeta.dateSource})`);
           datePara.setAttributes(articleTextStyle);
-          datePara.setHeading(DocumentApp.ParagraphHeading.NORMAL_TEXT);
+          datePara.setHeading(DocumentApp.ParagraphHeading.NORMAL);
 
           const sourcePara = docBody.appendParagraph(`Source Note: ${fileName}`);
           sourcePara.setAttributes(articleTextStyle);
-          sourcePara.setHeading(DocumentApp.ParagraphHeading.NORMAL_TEXT);
+          sourcePara.setHeading(DocumentApp.ParagraphHeading.NORMAL);
           docBody.appendParagraph("").appendHorizontalRule();
 
           // Complete the first page
@@ -658,7 +658,7 @@ function triggered_convertTextNotesToDoc() {
                   if (cleanP) {
                     const para = docBody.appendParagraph(cleanP);
                     para.setAttributes(articleTextStyle);
-                    para.setHeading(DocumentApp.ParagraphHeading.NORMAL_TEXT);
+                    para.setHeading(DocumentApp.ParagraphHeading.NORMAL);
                     // Make embedded URLs clickable
                     const urlRegex = /https?:\/\/[^\s)\]>"']+/g;
                     let match;
